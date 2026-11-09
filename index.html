@@ -2,98 +2,146 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>دردشة متطورة (مكالمات تعمل)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>دردشة متطورة</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/bcryptjs/2.4.3/bcrypt.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/idb-keyval@6/dist/umd.js"></script>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, sans-serif; }
-  body { background: #1e1e2e; color: #cdd6f4; height: 100vh; overflow: hidden; }
+  :root {
+    --bg: #1e1e2e; --bg-alt: #181825; --surface: #313244; --surface-hover: #45475a;
+    --text: #cdd6f4; --text-muted: #a6adc8; --primary: #89b4fa; --primary-hover: #b4befe;
+    --success: #a6e3a1; --danger: #f38ba8; --warning: #f9e2af; --border: #313244;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, sans-serif; -webkit-tap-highlight-color: transparent; }
+  body { background: var(--bg); color: var(--text); height: 100dvh; overflow: hidden; }
 
-  #authPage { position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 12px; padding: 20px; background: #1e1e2e; z-index: 100; }
-  #authPage h1 { color: #89b4fa; margin-bottom: 10px; }
-  .tabs { display: flex; gap: 0; margin-bottom: 10px; background: #181825; border-radius: 8px; overflow: hidden; }
-  .tabs button { padding: 10px 24px; background: transparent; border: none; color: #a6adc8; cursor: pointer; font-size: 0.95rem; }
-  .tabs button.active { background: #89b4fa; color: #1e1e2e; font-weight: bold; }
-  #authPage input { padding: 12px 16px; width: 280px; border-radius: 8px; border: 1px solid #45475a; background: #313244; color: #cdd6f4; outline: none; text-align: center; }
-  #authPage .submit { padding: 12px 32px; background: #89b4fa; color: #1e1e2e; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 1rem; }
-  #authPage .msg { font-size: 0.85rem; color: #f38ba8; min-height: 20px; text-align: center; max-width: 320px; word-wrap: break-word; }
+  /* ====== شاشة الدخول ====== */
+  #authPage { position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 15px; padding: 20px; background: var(--bg); z-index: 1000; }
+  #authPage h1 { color: var(--primary); font-size: 2rem; margin-bottom: 10px; }
+  .tabs { display: flex; background: var(--bg-alt); border-radius: 12px; overflow: hidden; border: 1px solid var(--border); }
+  .tabs button { padding: 12px 30px; background: transparent; border: none; color: var(--text-muted); cursor: pointer; font-size: 1rem; transition: 0.3s; }
+  .tabs button.active { background: var(--primary); color: var(--bg); font-weight: bold; }
+  #authPage input { padding: 14px 16px; width: 100%; max-width: 320px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--text); outline: none; font-size: 1rem; transition: 0.3s; }
+  #authPage input:focus { border-color: var(--primary); }
+  #authPage .submit { padding: 14px 32px; width: 100%; max-width: 320px; background: var(--primary); color: var(--bg); border: none; border-radius: 12px; cursor: pointer; font-weight: bold; font-size: 1rem; transition: 0.3s; }
+  #authPage .submit:hover { background: var(--primary-hover); }
+  #authPage .msg { font-size: 0.9rem; color: var(--danger); min-height: 22px; text-align: center; max-width: 320px; word-wrap: break-word; }
 
-  #mainPage { display: none; height: 100vh; }
-  #topbar { height: 54px; background: #181825; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid #313244; }
-  #topbar .brand { color: #89b4fa; font-weight: bold; }
-  #topbar .me { color: #a6adc8; font-size: 0.9rem; }
-  #topbar .me b { color: #cdd6f4; }
-  #topbar button { background: none; border: 1px solid #45475a; color: #a6adc8; padding: 6px 14px; border-radius: 6px; cursor: pointer; margin-right: 8px; }
-  #topbar button:hover { background: #313244; }
+  /* ====== الشاشة الرئيسية ====== */
+  #mainPage { display: none; height: 100dvh; width: 100%; overflow: hidden; }
+  
+  /* التخطيط الأساسي (Flexbox) */
+  #layoutWrapper { display: flex; flex-direction: row; height: 100%; width: 100%; position: relative; }
 
-  #layout { display: flex; height: calc(100vh - 54px); }
-  #sidebar { width: 280px; background: #181825; border-left: 1px solid #313244; display: flex; flex-direction: column; }
+  /* الشريط الجانبي */
+  #sidebar { width: 320px; height: 100%; background: var(--bg-alt); border-left: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; z-index: 100; }
+  
+  .sidebar-header { padding: 15px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); }
+  .sidebar-header .brand { color: var(--primary); font-weight: bold; font-size: 1.2rem; }
+  .sidebar-header .me { font-size: 0.85rem; color: var(--text-muted); }
+  .sidebar-header .me b { color: var(--text); }
+  .sidebar-header button { background: none; border: 1px solid var(--border); color: var(--text-muted); padding: 6px 12px; border-radius: 8px; cursor: pointer; font-size: 0.8rem; }
+  .sidebar-header button:hover { background: var(--surface); }
 
-  #connectBox { padding: 12px; border-bottom: 1px solid #313244; display: flex; flex-direction: column; gap: 8px; }
-  #connectBox .row { display: flex; gap: 6px; }
-  #connectBox input { flex-grow: 1; padding: 8px 10px; border: 1px solid #45475a; background: #313244; color: #cdd6f4; border-radius: 6px; outline: none; font-size: 0.9rem; }
-  #connectBox button { padding: 8px 14px; background: #89b4fa; color: #1e1e2e; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
-  #connectBox .btn-group { background: #a6e3a1; color: #1e1e2e; padding: 8px; border-radius: 6px; cursor: pointer; font-weight: bold; text-align: center; border: none; margin-top: 4px; }
+  #connectBox { padding: 15px; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid var(--border); }
+  #connectBox .row { display: flex; gap: 8px; }
+  #connectBox input { flex-grow: 1; padding: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 8px; outline: none; font-size: 0.9rem; }
+  #connectBox button { padding: 10px 15px; background: var(--primary); color: var(--bg); border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
+  #connectBox .btn-group { background: var(--success); color: var(--bg); padding: 10px; border-radius: 8px; cursor: pointer; font-weight: bold; text-align: center; border: none; }
 
-  .section-title { padding: 10px 12px 4px; font-size: 0.75rem; color: #6c7086; font-weight: bold; text-transform: uppercase; }
-  #contacts, #groupsList { flex-grow: 0; overflow-y: auto; padding: 0 8px 8px; max-height: 40%; }
-  .contact { padding: 10px 12px; margin-bottom: 4px; background: #313244; border-radius: 8px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-  .contact:hover { background: #45475a; }
-  .contact.active { background: #89b4fa; color: #1e1e2e; }
-  .contact.active .status { color: #1e1e2e !important; }
+  .section-title { padding: 12px 15px 6px; font-size: 0.75rem; color: var(--text-muted); font-weight: bold; text-transform: uppercase; letter-spacing: 1px; }
+  .list-container { flex-grow: 1; overflow-y: auto; padding: 0 10px 10px; }
+  
+  .contact { padding: 12px; margin-bottom: 6px; background: var(--surface); border-radius: 10px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 10px; transition: 0.2s; }
+  .contact:hover { background: var(--surface-hover); }
+  .contact.active { background: var(--primary); color: var(--bg); }
+  .contact.active .status { color: var(--bg) !important; }
   .contact .info { flex-grow: 1; min-width: 0; }
-  .contact .name { font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .contact .status { font-size: 0.75rem; margin-top: 2px; color: #6c7086; }
-  .contact .badge { background: #f38ba8; color: #1e1e2e; font-size: 0.7rem; font-weight: bold; padding: 2px 7px; border-radius: 10px; min-width: 20px; text-align: center; }
+  .contact .name { font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.95rem; }
+  .contact .status { font-size: 0.75rem; margin-top: 3px; color: var(--text-muted); }
+  .contact .badge { background: var(--danger); color: var(--bg); font-size: 0.75rem; font-weight: bold; padding: 2px 8px; border-radius: 12px; min-width: 22px; text-align: center; }
 
-  #chatArea { flex-grow: 1; display: flex; flex-direction: column; min-width: 0; }
-  #chatHeader { padding: 12px 20px; background: #181825; border-bottom: 1px solid #313244; display: flex; justify-content: space-between; align-items: center; }
-  #chatHeader h2 { color: #89b4fa; font-size: 1.05rem; }
+  /* منطقة الدردشة */
+  #chatArea { flex-grow: 1; display: flex; flex-direction: column; height: 100%; min-width: 0; background: var(--bg); }
+  
+  #chatHeader { padding: 15px 20px; background: var(--bg-alt); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; min-height: 64px; }
+  #chatHeader .header-left { display: flex; align-items: center; gap: 15px; }
+  #menuBtn { display: none; background: none; border: none; color: var(--text); font-size: 1.5rem; cursor: pointer; }
+  #chatHeader h2 { color: var(--primary); font-size: 1.1rem; }
   .call-btns { display: flex; gap: 10px; }
-  .call-btns button { background: #313244; border: 1px solid #45475a; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 1.2rem; transition: 0.2s; }
-  .call-btns button:hover { background: #45475a; }
+  .call-btns button { background: var(--surface); border: 1px solid var(--border); padding: 10px 14px; border-radius: 10px; cursor: pointer; font-size: 1.2rem; transition: 0.2s; color: var(--text); }
+  .call-btns button:hover { background: var(--surface-hover); color: var(--primary); }
 
-  #welcome { flex-grow: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; color: #6c7086; text-align: center; padding: 20px; }
-  #welcome h1 { color: #89b4fa; margin-bottom: 10px; font-size: 1.2rem; }
+  #welcome { flex-grow: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; color: var(--text-muted); text-align: center; padding: 20px; }
+  #welcome h1 { color: var(--primary); margin-bottom: 10px; font-size: 1.5rem; }
 
   #chatBox { display: none; flex-grow: 1; flex-direction: column; min-height: 0; }
-  #messages { flex-grow: 1; overflow-y: auto; padding: 16px 20px; min-height: 0; }
-  .msg { margin-bottom: 12px; max-width: 70%; }
-  .msg.mine { margin-left: auto; text-align: left; }
-  .msg.theirs { margin-right: auto; text-align: right; }
-  .msg .bubble { padding: 10px 14px; border-radius: 14px; word-wrap: break-word; overflow: hidden; }
-  .msg.mine .bubble { background: #89b4fa; color: #1e1e2e; border-bottom-left-radius: 4px; }
-  .msg.theirs .bubble { background: #313244; color: #cdd6f4; border-bottom-right-radius: 4px; }
-  .msg .bubble img, .msg .bubble video { max-width: 100%; border-radius: 8px; margin-top: 8px; display: block; }
-  .msg .bubble a { color: inherit; text-decoration: underline; display: block; margin-top: 5px; }
-  .msg .meta { font-size: 0.7rem; color: #6c7086; margin-top: 3px; padding: 0 4px; }
-  .msg.mine .meta { text-align: left; }
-  .msg.theirs .meta { text-align: right; }
-
-  #inputBox { display: flex; padding: 12px 20px; background: #181825; border-top: 1px solid #313244; gap: 8px; align-items: center; }
-  #inputBox .attach { cursor: pointer; font-size: 1.5rem; color: #a6adc8; padding: 0 5px; }
-  #inputBox .attach:hover { color: #89b4fa; }
-  #inputBox input[type="text"] { flex-grow: 1; padding: 10px 14px; border: none; border-radius: 8px; background: #313244; color: #cdd6f4; outline: none; }
-  #inputBox button { padding: 10px 22px; background: #89b4fa; color: #1e1e2e; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
-
-  /* شاشة المكالمة */
-  #callOverlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.9); z-index: 1000; flex-direction: column; align-items: center; justify-content: center; }
-  #callOverlay h2 { color: white; margin-bottom: 20px; }
-  #videoContainer { position: relative; width: 80%; max-width: 800px; height: 60%; background: #000; border-radius: 12px; overflow: hidden; display: flex; justify-content: center; align-items: center; }
-  #remoteVideo { width: 100%; height: 100%; object-fit: cover; }
-  #localVideo { position: absolute; bottom: 20px; right: 20px; width: 150px; height: 100px; background: #000; border-radius: 8px; object-fit: cover; border: 2px solid #fff; }
-  .call-controls { display: flex; gap: 20px; margin-top: 20px; }
-  .call-controls button { padding: 15px 30px; border-radius: 30px; border: none; font-size: 1.2rem; font-weight: bold; cursor: pointer; }
-  .btn-end { background: #f38ba8; color: #1e1e2e; }
-  .btn-mute { background: #f9e2af; color: #1e1e2e; }
+  #messages { flex-grow: 1; overflow-y: auto; padding: 20px; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
   
-  #incomingCallPopup { display: none; position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: #89b4fa; color: #1e1e2e; padding: 15px 30px; border-radius: 12px; z-index: 2000; box-shadow: 0 10px 30px rgba(0,0,0,0.5); align-items: center; gap: 20px; font-weight: bold; }
-  #incomingCallPopup button { padding: 8px 16px; border-radius: 8px; border: none; cursor: pointer; font-weight: bold; }
+  .msg { max-width: 80%; display: flex; flex-direction: column; }
+  .msg.mine { align-self: flex-end; align-items: flex-end; }
+  .msg.theirs { align-self: flex-start; align-items: flex-start; }
+  .msg .bubble { padding: 12px 16px; border-radius: 18px; word-wrap: break-word; overflow: hidden; font-size: 0.95rem; line-height: 1.4; }
+  .msg.mine .bubble { background: var(--primary); color: var(--bg); border-bottom-right-radius: 4px; }
+  .msg.theirs .bubble { background: var(--surface); color: var(--text); border-bottom-left-radius: 4px; }
+  .msg .bubble img, .msg .bubble video { max-width: 100%; border-radius: 12px; margin-top: 8px; display: block; }
+  .msg .bubble a { color: inherit; text-decoration: underline; display: inline-block; margin-top: 5px; background: rgba(0,0,0,0.1); padding: 4px 8px; border-radius: 4px; }
+  .msg .meta { font-size: 0.7rem; color: var(--text-muted); margin-top: 4px; padding: 0 5px; }
+
+  #inputBox { display: flex; padding: 15px 20px; background: var(--bg-alt); border-top: 1px solid var(--border); gap: 10px; align-items: center; }
+  #inputBox .attach { cursor: pointer; font-size: 1.5rem; color: var(--text-muted); padding: 0 5px; transition: 0.2s; }
+  #inputBox .attach:hover { color: var(--primary); }
+  #inputBox input[type="text"] { flex-grow: 1; padding: 12px 16px; border: none; border-radius: 12px; background: var(--surface); color: var(--text); outline: none; font-size: 1rem; }
+  #inputBox button { padding: 12px 24px; background: var(--primary); color: var(--bg); border: none; border-radius: 12px; cursor: pointer; font-weight: bold; font-size: 1rem; transition: 0.2s; }
+  #inputBox button:hover { background: var(--primary-hover); }
+
+  /* ====== شاشة المكالمة ====== */
+  #callOverlay { display: none; position: fixed; inset: 0; background: rgba(10,10,15,0.95); z-index: 2000; flex-direction: column; align-items: center; justify-content: center; padding: 20px; }
+  #callOverlay h2 { color: white; margin-bottom: 20px; font-size: 1.2rem; text-align: center; }
+  #videoContainer { position: relative; width: 100%; max-width: 900px; height: 50vh; background: #000; border-radius: 16px; overflow: hidden; display: flex; justify-content: center; align-items: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+  #remoteVideo { width: 100%; height: 100%; object-fit: cover; }
+  #localVideo { position: absolute; bottom: 15px; right: 15px; width: 100px; height: 130px; background: #111; border-radius: 12px; object-fit: cover; border: 2px solid rgba(255,255,255,0.2); box-shadow: 0 4px 10px rgba(0,0,0,0.5); z-index: 10; }
+  
+  .call-controls { display: flex; gap: 20px; margin-top: 30px; }
+  .call-controls button { width: 60px; height: 60px; border-radius: 50%; border: none; font-size: 1.5rem; cursor: pointer; display: flex; justify-content: center; align-items: center; transition: 0.2s; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
+  .btn-end { background: var(--danger); color: white; }
+  .btn-end:hover { transform: scale(1.1); }
+  .btn-mute { background: var(--warning); color: var(--bg); }
+  .btn-mute:hover { transform: scale(1.1); }
+  
+  #incomingCallPopup { display: none; position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: var(--bg-alt); color: var(--text); padding: 20px; border-radius: 16px; z-index: 3000; box-shadow: 0 10px 30px rgba(0,0,0,0.5); align-items: center; gap: 20px; font-weight: bold; border: 1px solid var(--border); flex-direction: column; text-align: center; width: 90%; max-width: 350px; }
+  .incoming-btns { display: flex; gap: 15px; width: 100%; justify-content: center; }
+  #incomingCallPopup button { padding: 12px 24px; border-radius: 12px; border: none; cursor: pointer; font-weight: bold; font-size: 1rem; flex: 1; }
+  .btn-accept { background: var(--success); color: var(--bg); }
+  .btn-reject { background: var(--danger); color: var(--bg); }
+
+  /* ====== تصميم الجوال ====== */
+  @media (max-width: 768px) {
+    #sidebar { 
+      position: absolute; 
+      top: 0; 
+      right: 0; 
+      height: 100%; 
+      width: 85%; 
+      max-width: 320px; 
+      margin-right: -100vw; /* إخفاء ذكي بدون مشاكل الاتجاه */
+      transition: margin-right 0.3s ease-in-out;
+      box-shadow: -5px 0 20px rgba(0,0,0,0.5);
+    }
+    #sidebar.open { margin-right: 0; }
+    
+    #menuBtn { display: block; }
+    #chatHeader { padding: 12px 15px; }
+    #inputBox { padding: 10px 15px; }
+    #inputBox button { padding: 10px 18px; }
+    #messages { padding: 15px; }
+    #localVideo { width: 90px; height: 120px; }
+  }
 </style>
 </head>
 <body>
 
+<!-- شاشة الدخول -->
 <div id="authPage">
   <h1>💬 دردشة متطورة</h1>
   <div class="tabs">
@@ -106,44 +154,55 @@
   <div class="msg" id="authMsg"></div>
 </div>
 
+<!-- الشاشة الرئيسية -->
 <div id="mainPage">
-  <div id="topbar">
-    <span class="brand">💬 دردشة</span>
-    <div>
-      <span class="me">أنت: <b id="myNameDisplay"></b></span>
-      <button onclick="logout()">خروج</button>
-    </div>
-  </div>
-
-  <div id="layout">
+  <div id="layoutWrapper">
+    
+    <!-- الشريط الجانبي -->
     <div id="sidebar">
+      <div class="sidebar-header">
+        <div>
+          <div class="brand">💬 دردشة</div>
+          <div class="me">أنت: <b id="myNameDisplay"></b></div>
+        </div>
+        <div style="display:flex; gap:5px;">
+          <button onclick="logout()">خروج</button>
+        </div>
+      </div>
+      
       <div id="connectBox">
         <div class="row">
-          <input id="connectInput" placeholder="اسم المستخدم..." onkeypress="if(event.key==='Enter') connect()">
+          <input id="connectInput" placeholder="اسم صديق..." onkeypress="if(event.key==='Enter') connect()">
           <button onclick="connect()">اتصال</button>
         </div>
         <button class="btn-group" onclick="createGroup()">➕ إنشاء مجموعة</button>
       </div>
       
       <div class="section-title">المجموعات</div>
-      <div id="groupsList"></div>
+      <div id="groupsList" class="list-container" style="max-height: 35%;"></div>
 
       <div class="section-title">الأصدقاء</div>
-      <div id="contacts"></div>
+      <div id="contacts" class="list-container"></div>
     </div>
 
+    <!-- منطقة الدردشة -->
     <div id="chatArea">
-      <div id="chatHeader" style="display:none">
-        <h2 id="chatTitle"></h2>
-        <div class="call-btns" id="callButtons">
+      <div id="chatHeader">
+        <div class="header-left">
+          <button id="menuBtn" onclick="toggleSidebar()">☰</button>
+          <h2 id="chatTitle">اختر محادثة</h2>
+        </div>
+        <div class="call-btns" id="callButtons" style="display:none;">
           <button onclick="startCall(false)" title="مكالمة صوتية">📞</button>
           <button onclick="startCall(true)" title="مكالمة فيديو">📹</button>
         </div>
       </div>
+      
       <div id="welcome">
         <h1>مرحبًا 👋</h1>
         <p>اختر صديقاً أو مجموعة لبدء الدردشة</p>
       </div>
+      
       <div id="chatBox">
         <div id="messages"></div>
         <div id="inputBox">
@@ -154,9 +213,11 @@
         </div>
       </div>
     </div>
+
   </div>
 </div>
 
+<!-- شاشة المكالمة -->
 <div id="callOverlay">
   <h2 id="callStatus">جارٍ الاتصال...</h2>
   <div id="videoContainer">
@@ -164,15 +225,18 @@
     <video id="localVideo" autoplay playsinline muted></video>
   </div>
   <div class="call-controls">
-    <button class="btn-mute" id="muteBtn" onclick="toggleMute()">🎤 كتم</button>
-    <button class="btn-end" onclick="endCall()">❌ إنهاء</button>
+    <button class="btn-mute" id="muteBtn" onclick="toggleMute()">🎤</button>
+    <button class="btn-end" onclick="endCall()">❌</button>
   </div>
 </div>
 
+<!-- إشعار مكالمة واردة -->
 <div id="incomingCallPopup">
   <span id="incomingText">📞 مكالمة واردة...</span>
-  <button style="background:#a6e3a1;" onclick="acceptCall()">قبول</button>
-  <button style="background:#f38ba8;" onclick="rejectCall()">رفض</button>
+  <div class="incoming-btns">
+    <button class="btn-accept" onclick="acceptCall()">قبول</button>
+    <button class="btn-reject" onclick="rejectCall()">رفض</button>
+  </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -194,6 +258,16 @@ let authMode = 'login';
 let renderedIds = new Set();
 let myGroups = [];
 
+// ================== UI HELPERS ==================
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+}
+function closeSidebarOnMobile() {
+  if (window.innerWidth <= 768) {
+    document.getElementById('sidebar').classList.remove('open');
+  }
+}
+
 // ================== AUTH ==================
 function switchTab(mode) {
   authMode = mode;
@@ -210,7 +284,7 @@ async function submitAuth() {
   msgEl.textContent = '...';
 
   if (!username || password.length < 4) return msgEl.textContent = 'البيانات غير مكتملة';
-  if (!bcryptLib) return msgEl.textContent = 'خطأ في تحميل المكتبة';
+  if (!bcryptLib) return msgEl.textContent = 'خطأ في تحميل مكتبة التشفير';
 
   try {
     if (authMode === 'signup') {
@@ -274,7 +348,7 @@ async function refreshSidebar() {
       </div>
     `).join('');
   } else {
-    document.getElementById('groupsList').innerHTML = '<div style="padding:10px; color:#6c7086; font-size:0.8rem;">لا توجد مجموعات</div>';
+    document.getElementById('groupsList').innerHTML = '<div style="padding:10px; color:var(--text-muted); font-size:0.85rem;">لا توجد مجموعات</div>';
   }
 
   const { data: msgs } = await sb.from('messages').select('sender_id, receiver_id').or(`sender_id.eq.${currentUser.id},receiver_id.eq.${currentUser.id}`);
@@ -286,7 +360,7 @@ async function refreshSidebar() {
   onlineUsers.forEach(id => { if (id !== currentUser.id) peerIds.add(id); });
 
   if (peerIds.size === 0) {
-    document.getElementById('contacts').innerHTML = '<div style="padding:10px; color:#6c7086; font-size:0.8rem;">لا يوجد أصدقاء</div>';
+    document.getElementById('contacts').innerHTML = '<div style="padding:10px; color:var(--text-muted); font-size:0.85rem;">لا يوجد أصدقاء</div>';
     return;
   }
 
@@ -300,7 +374,7 @@ async function refreshSidebar() {
     const active = currentChatId === p.id ? 'active' : '';
     const badge = unreadCount[p.id] ? `<span class="badge">${unreadCount[p.id]}</span>` : '';
     return `<div class="contact ${active}" onclick="openChat('${p.id}', '${escapeAttr(p.username)}', 'dm')">
-      <div class="info"><div class="name">${escapeHtml(p.username)}</div><div class="status" style="color:${online?'#a6e3a1':'#6c7086'}">${online ? '● متصل' : '○ غير متصل'}</div></div>
+      <div class="info"><div class="name">${escapeHtml(p.username)}</div><div class="status" style="color:${online?'var(--success)':'var(--text-muted)'}">${online ? '● متصل' : '○ غير متصل'}</div></div>
       ${badge}
     </div>`;
   }).join('');
@@ -336,6 +410,7 @@ async function connect() {
   if (!profile) return alert('المستخدم غير موجود');
   document.getElementById('connectInput').value = '';
   openChat(profile.id, profile.username, 'dm');
+  closeSidebarOnMobile();
 }
 
 async function openChat(id, name, type) {
@@ -346,13 +421,13 @@ async function openChat(id, name, type) {
 
   document.getElementById('welcome').style.display = 'none';
   document.getElementById('chatBox').style.display = 'flex';
-  document.getElementById('chatHeader').style.display = 'flex';
   document.getElementById('chatTitle').textContent = name;
   document.getElementById('messages').innerHTML = '';
   
   document.getElementById('callButtons').style.display = type === 'dm' ? 'flex' : 'none';
 
   refreshSidebar();
+  closeSidebarOnMobile();
 
   let query = sb.from('messages').select('*').order('created_at');
   if (type === 'group') {
@@ -526,25 +601,25 @@ async function downloadAndSaveFile(url, fileName, fileType, originalName, el) {
   } catch (err) { console.error("فشل تحميل الملف: ", err); }
 }
 
-// ================== WEBRTC CALLS (FIXED) ==================
+// ================== WEBRTC CALLS ==================
 let peerConnection = null;
 let localStream = null;
 let callChannel = null;
 let incomingCallData = null;
 let isCalling = false;
 let isCaller = false;
-let iceCandidatesQueue = []; // لحفظ المرشحات لحين اكتمال الاتصال
+let iceCandidatesQueue = []; 
 
 const rtcConfig = { 
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    // TURN مجاني لضمان نجاح الاتصال في الشبكات المقيدة
-    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' }
+    { urls: 'turn:standard.relay.metered.ca:80', username: 'e8b8c8a0b8c8d8e8f8a8b8c8', credential: 'e8b8c8a0b8c8d8e8f8a8b8c8' },
+    { urls: 'turn:standard.relay.metered.ca:443', username: 'e8b8c8a0b8c8d8e8f8a8b8c8', credential: 'e8b8c8a0b8c8d8e8f8a8b8c8' },
+    { urls: 'turns:standard.relay.metered.ca:443', username: 'e8b8c8a0b8c8d8e8f8a8b8c8', credential: 'e8b8c8a0b8c8d8e8f8a8b8c8' }
   ] 
 };
 
-// 1. الاستماع الدائم للمكالمات الواردة
 function listenForIncomingCalls() {
   sb.channel(`incoming_calls_${currentUser.id}`)
     .on('broadcast', { event: 'call_offer' }, ({ payload }) => {
@@ -563,7 +638,6 @@ function listenForIncomingCalls() {
     .subscribe();
 }
 
-// 2. بدء المكالمة (المتصل)
 async function startCall(isVideo) {
   if (isCalling || !currentChatId || currentChatType !== 'dm') return;
   isCalling = true;
@@ -579,15 +653,15 @@ async function startCall(isVideo) {
   
   callChannel
     .on('broadcast', { event: 'ready' }, async () => {
-      // الطرف الآخر قبل المكالمة وجاهز، نرسل له العرض
       document.getElementById('callStatus').textContent = 'جارٍ التشفير...';
+      await new Promise(r => setTimeout(r, 1000));
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
       callChannel.send({ type: 'broadcast', event: 'offer', payload: { offer } });
     })
     .on('broadcast', { event: 'answer' }, async ({ payload }) => {
       await peerConnection.setRemoteDescription(new RTCSessionDescription(payload.answer));
-      processIceQueue(); // معالجة المرشحات المعلقة
+      processIceQueue(); 
     })
     .on('broadcast', { event: 'ice-candidate' }, async ({ payload }) => {
       if (payload.candidate) {
@@ -604,7 +678,6 @@ async function startCall(isVideo) {
     })
     .subscribe((status) => {
       if (status === 'SUBSCRIBED') {
-        // إرسال إشعار للمتلقي
         sb.channel(`incoming_calls_${currentChatId}`).send({
           type: 'broadcast', event: 'call_offer',
           payload: { callerId: currentUser.id, callerName: currentUser.username, isVideo, roomId }
@@ -613,7 +686,6 @@ async function startCall(isVideo) {
     });
 }
 
-// 3. قبول المكالمة (المتلقي)
 async function acceptCall() {
   document.getElementById('incomingCallPopup').style.display = 'none';
   if (!incomingCallData) return;
@@ -631,8 +703,7 @@ async function acceptCall() {
   callChannel
     .on('broadcast', { event: 'offer' }, async ({ payload }) => {
       await peerConnection.setRemoteDescription(new RTCSessionDescription(payload.offer));
-      processIceQueue(); // معالجة المرشحات المعلقة
-      
+      processIceQueue(); 
       const answer = await peerConnection.createAnswer();
       await peerConnection.setLocalDescription(answer);
       callChannel.send({ type: 'broadcast', event: 'answer', payload: { answer } });
@@ -648,7 +719,6 @@ async function acceptCall() {
     })
     .subscribe((status) => {
       if (status === 'SUBSCRIBED') {
-        // إخبار المتصل أننا جاهزون لاستقبال العرض
         callChannel.send({ type: 'broadcast', event: 'ready' });
       }
     });
@@ -656,7 +726,6 @@ async function acceptCall() {
   incomingCallData = null;
 }
 
-// 4. الدوال المساعدة للمكالمة
 function showCallUI(isVideo, statusText) {
   document.getElementById('callOverlay').style.display = 'flex';
   document.getElementById('callStatus').textContent = statusText;
@@ -705,7 +774,6 @@ function processIceQueue() {
   iceCandidatesQueue = [];
 }
 
-// 5. إدارة المكالمة
 function rejectCall() {
   if (incomingCallData) {
     sb.channel(`incoming_calls_${incomingCallData.callerId}`).send({ type: 'broadcast', event: 'call_rejected', payload: {} });
@@ -719,7 +787,7 @@ function toggleMute() {
     const audioTrack = localStream.getAudioTracks()[0];
     if (audioTrack) {
       audioTrack.enabled = !audioTrack.enabled;
-      document.getElementById('muteBtn').textContent = audioTrack.enabled ? '🎤 كتم' : '🔇 إلغاء الكتم';
+      document.getElementById('muteBtn').textContent = audioTrack.enabled ? '🎤' : '🔇';
     }
   }
 }
@@ -740,7 +808,7 @@ function endCall() {
   document.getElementById('callOverlay').style.display = 'none';
   document.getElementById('remoteVideo').srcObject = null;
   document.getElementById('localVideo').srcObject = null;
-  document.getElementById('muteBtn').textContent = '🎤 كتم';
+  document.getElementById('muteBtn').textContent = '🎤';
 }
 
 // ================== HELPERS ==================

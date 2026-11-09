@@ -6,6 +6,8 @@
 <title>دردشة متطورة</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/bcryptjs/2.4.3/bcrypt.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/idb-keyval@6/dist/umd.js"></script>
+<!-- استيراد مكتبة Trystero لاستراتيجية Supabase -->
+<script src="https://cdn.jsdelivr.net/npm/trystero@0.21.0/dist/trystero-supabase.min.js"></script>
 <style>
   :root {
     --bg: #1e1e2e; --bg-alt: #181825; --surface: #313244; --surface-hover: #45475a;
@@ -29,13 +31,9 @@
 
   /* ====== الشاشة الرئيسية ====== */
   #mainPage { display: none; height: 100dvh; width: 100%; overflow: hidden; }
-  
-  /* التخطيط الأساسي (Flexbox) */
   #layoutWrapper { display: flex; flex-direction: row; height: 100%; width: 100%; position: relative; }
 
-  /* الشريط الجانبي */
   #sidebar { width: 320px; height: 100%; background: var(--bg-alt); border-left: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; z-index: 100; }
-  
   .sidebar-header { padding: 15px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); }
   .sidebar-header .brand { color: var(--primary); font-weight: bold; font-size: 1.2rem; }
   .sidebar-header .me { font-size: 0.85rem; color: var(--text-muted); }
@@ -61,9 +59,7 @@
   .contact .status { font-size: 0.75rem; margin-top: 3px; color: var(--text-muted); }
   .contact .badge { background: var(--danger); color: var(--bg); font-size: 0.75rem; font-weight: bold; padding: 2px 8px; border-radius: 12px; min-width: 22px; text-align: center; }
 
-  /* منطقة الدردشة */
   #chatArea { flex-grow: 1; display: flex; flex-direction: column; height: 100%; min-width: 0; background: var(--bg); }
-  
   #chatHeader { padding: 15px 20px; background: var(--bg-alt); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; min-height: 64px; }
   #chatHeader .header-left { display: flex; align-items: center; gap: 15px; }
   #menuBtn { display: none; background: none; border: none; color: var(--text); font-size: 1.5rem; cursor: pointer; }
@@ -118,18 +114,10 @@
   /* ====== تصميم الجوال ====== */
   @media (max-width: 768px) {
     #sidebar { 
-      position: absolute; 
-      top: 0; 
-      right: 0; 
-      height: 100%; 
-      width: 85%; 
-      max-width: 320px; 
-      margin-right: -100vw; /* إخفاء ذكي بدون مشاكل الاتجاه */
-      transition: margin-right 0.3s ease-in-out;
-      box-shadow: -5px 0 20px rgba(0,0,0,0.5);
+      position: absolute; top: 0; right: 0; height: 100%; width: 85%; max-width: 320px; 
+      margin-right: -100vw; transition: margin-right 0.3s ease-in-out; box-shadow: -5px 0 20px rgba(0,0,0,0.5);
     }
     #sidebar.open { margin-right: 0; }
-    
     #menuBtn { display: block; }
     #chatHeader { padding: 12px 15px; }
     #inputBox { padding: 10px 15px; }
@@ -157,7 +145,6 @@
 <!-- الشاشة الرئيسية -->
 <div id="mainPage">
   <div id="layoutWrapper">
-    
     <!-- الشريط الجانبي -->
     <div id="sidebar">
       <div class="sidebar-header">
@@ -169,7 +156,6 @@
           <button onclick="logout()">خروج</button>
         </div>
       </div>
-      
       <div id="connectBox">
         <div class="row">
           <input id="connectInput" placeholder="اسم صديق..." onkeypress="if(event.key==='Enter') connect()">
@@ -177,10 +163,8 @@
         </div>
         <button class="btn-group" onclick="createGroup()">➕ إنشاء مجموعة</button>
       </div>
-      
       <div class="section-title">المجموعات</div>
       <div id="groupsList" class="list-container" style="max-height: 35%;"></div>
-
       <div class="section-title">الأصدقاء</div>
       <div id="contacts" class="list-container"></div>
     </div>
@@ -197,12 +181,10 @@
           <button onclick="startCall(true)" title="مكالمة فيديو">📹</button>
         </div>
       </div>
-      
       <div id="welcome">
         <h1>مرحبًا 👋</h1>
         <p>اختر صديقاً أو مجموعة لبدء الدردشة</p>
       </div>
-      
       <div id="chatBox">
         <div id="messages"></div>
         <div id="inputBox">
@@ -213,7 +195,6 @@
         </div>
       </div>
     </div>
-
   </div>
 </div>
 
@@ -245,6 +226,9 @@ const SUPABASE_URL = 'https://uongzuhnpngcrulvptuw.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_OIrvN5pAF8oCJkOEn4uucQ_DzuNQJQh';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// إعدادات Trystero
+const trysteroConfig = { appId: SUPABASE_URL, supabaseKey: SUPABASE_ANON_KEY };
+
 let bcryptLib = typeof bcrypt !== 'undefined' ? bcrypt : (typeof dcodeIO !== 'undefined' ? dcodeIO.bcrypt : null);
 
 let currentUser = null;
@@ -259,14 +243,8 @@ let renderedIds = new Set();
 let myGroups = [];
 
 // ================== UI HELPERS ==================
-function toggleSidebar() {
-  document.getElementById('sidebar').classList.toggle('open');
-}
-function closeSidebarOnMobile() {
-  if (window.innerWidth <= 768) {
-    document.getElementById('sidebar').classList.remove('open');
-  }
-}
+function toggleSidebar() { document.getElementById('sidebar').classList.toggle('open'); }
+function closeSidebarOnMobile() { if (window.innerWidth <= 768) document.getElementById('sidebar').classList.remove('open'); }
 
 // ================== AUTH ==================
 function switchTab(mode) {
@@ -290,18 +268,15 @@ async function submitAuth() {
     if (authMode === 'signup') {
       const { data: exists } = await sb.from('site_users').select('id').eq('username', username).maybeSingle();
       if (exists) return msgEl.textContent = 'الاسم محجوز';
-
       const hash = bcryptLib.hashSync(password, bcryptLib.genSaltSync(10));
       const { data, error } = await sb.from('site_users').insert({ username, password_hash: hash, role: 'user' }).select().single();
       if (error) throw new Error(error.message);
-
       currentUser = { id: data.id, username: data.username };
       localStorage.setItem('chat_user', JSON.stringify(currentUser));
       enterMain();
     } else {
       const { data: user } = await sb.from('site_users').select('*').eq('username', username).maybeSingle();
       if (!user || !bcryptLib.compareSync(password, user.password_hash)) return msgEl.textContent = 'بيانات خاطئة';
-
       currentUser = { id: user.id, username: user.username };
       localStorage.setItem('chat_user', JSON.stringify(currentUser));
       enterMain();
@@ -385,19 +360,14 @@ async function createGroup() {
   if (!name) return;
   const membersStr = prompt("أسماء الأعضاء (مفصولة بفاصلة):");
   if (!membersStr) return;
-
   const usernames = membersStr.split(',').map(s => s.trim()).filter(s => s);
   usernames.push(currentUser.username);
-
   const { data: users } = await sb.from('site_users').select('id, username').in('username', usernames);
   if (!users || users.length === 0) return alert("لم يتم العثور على الأعضاء");
-
   const { data: group, error } = await sb.from('groups').insert({ name, created_by: currentUser.id }).select().single();
   if (error) return alert("خطأ: " + error.message);
-
   const groupMembers = users.map(u => ({ group_id: group.id, user_id: u.id }));
   await sb.from('group_members').insert(groupMembers);
-
   alert("تم إنشاء المجموعة!");
   refreshSidebar();
   openChat(group.id, group.name, 'group');
@@ -418,30 +388,20 @@ async function openChat(id, name, type) {
   currentChatType = type;
   currentChatName = name;
   renderedIds.clear();
-
   document.getElementById('welcome').style.display = 'none';
   document.getElementById('chatBox').style.display = 'flex';
   document.getElementById('chatTitle').textContent = name;
   document.getElementById('messages').innerHTML = '';
-  
   document.getElementById('callButtons').style.display = type === 'dm' ? 'flex' : 'none';
-
   refreshSidebar();
   closeSidebarOnMobile();
 
   let query = sb.from('messages').select('*').order('created_at');
-  if (type === 'group') {
-    query = query.eq('group_id', id);
-  } else {
-    const room = makeRoom(currentUser.id, id);
-    query = query.eq('room', room);
-  }
+  if (type === 'group') query = query.eq('group_id', id);
+  else query = query.eq('room', makeRoom(currentUser.id, id));
 
   const { data: msgs } = await query;
-  for (const m of (msgs || [])) {
-    await renderMessage(m);
-  }
-
+  for (const m of (msgs || [])) await renderMessage(m);
   if (type === 'dm') {
     await sb.from('messages').update({ read_at: new Date().toISOString() })
       .eq('room', makeRoom(currentUser.id, id)).eq('receiver_id', currentUser.id).is('read_at', null);
@@ -455,19 +415,11 @@ async function send() {
   const input = document.getElementById('msgInput');
   const text = input.value.trim();
   if (!text || !currentChatId) return;
-
   const msgData = { sender_id: currentUser.id, sender_name: currentUser.username, content: text };
-  if (currentChatType === 'group') {
-    msgData.group_id = currentChatId;
-    msgData.room = currentChatId;
-  } else {
-    msgData.receiver_id = currentChatId;
-    msgData.room = makeRoom(currentUser.id, currentChatId);
-  }
-
+  if (currentChatType === 'group') { msgData.group_id = currentChatId; msgData.room = currentChatId; }
+  else { msgData.receiver_id = currentChatId; msgData.room = makeRoom(currentUser.id, currentChatId); }
   const { data, error } = await sb.from('messages').insert(msgData).select().single();
   if (error) return alert("فشل الإرسال: " + error.message);
-  
   await renderMessage(data);
   input.value = '';
   input.focus();
@@ -477,36 +429,24 @@ async function handleFileSelect(input) {
   const file = input.files[0];
   if (!file || !currentChatId) return;
   if (file.size > 50 * 1024 * 1024) return alert("الحد الأقصى 50 ميجابايت");
-
   input.value = ''; 
   const originalName = file.name;
   const safeName = sanitizeFileName(originalName);
   const fileName = `${Date.now()}_${safeName}`;
   const filePath = `${currentChatType}/${currentChatId}/${fileName}`;
-
   const { error: uploadError } = await sb.storage.from('chat_files').upload(filePath, file);
   if (uploadError) return alert("فشل الرفع: " + uploadError.message);
-
   const { data: urlData } = sb.storage.from('chat_files').getPublicUrl(filePath);
   const fileUrl = urlData.publicUrl;
-
   await idbKeyval.set(fileName, file);
-
   const msgData = { 
     sender_id: currentUser.id, sender_name: currentUser.username, content: '', 
     file_url: fileUrl, file_type: file.type, file_name: fileName, file_original_name: originalName
   };
-  if (currentChatType === 'group') {
-    msgData.group_id = currentChatId;
-    msgData.room = currentChatId;
-  } else {
-    msgData.receiver_id = currentChatId;
-    msgData.room = makeRoom(currentUser.id, currentChatId);
-  }
-
+  if (currentChatType === 'group') { msgData.group_id = currentChatId; msgData.room = currentChatId; }
+  else { msgData.receiver_id = currentChatId; msgData.room = makeRoom(currentUser.id, currentChatId); }
   const { data, error } = await sb.from('messages').insert(msgData).select().single();
   if (error) return alert("فشل حفظ الرسالة: " + error.message);
-
   await renderMessage(data);
 }
 
@@ -514,28 +454,22 @@ async function handleIncoming(m) {
   let isForMe = false;
   if (currentChatType === 'group' && m.group_id === currentChatId) isForMe = true;
   if (currentChatType === 'dm' && m.room === makeRoom(currentUser.id, currentChatId)) isForMe = true;
-
   if (isForMe) {
     await renderMessage(m);
     if (currentChatType === 'dm' && m.sender_id !== currentUser.id) {
       await sb.from('messages').update({ read_at: new Date().toISOString() }).eq('id', m.id);
     }
-  } else {
-    refreshSidebar();
-  }
+  } else { refreshSidebar(); }
 }
 
 async function renderMessage(m) {
   if (renderedIds.has(m.id)) return;
   renderedIds.add(m.id);
-
   const isMine = m.sender_id === currentUser.id;
   const box = document.getElementById('messages');
   const el = document.createElement('div');
   el.className = 'msg ' + (isMine ? 'mine' : 'theirs');
-  
   let contentHtml = escapeHtml(m.content || '');
-  
   if (m.file_url && m.file_name) {
     let localBlob = await idbKeyval.get(m.file_name);
     if (localBlob) {
@@ -547,11 +481,7 @@ async function renderMessage(m) {
       downloadAndSaveFile(m.file_url, m.file_name, m.file_type, m.file_original_name, el);
     }
   }
-
-  el.innerHTML = `
-    <div class="bubble">${contentHtml}</div>
-    <div class="meta">${escapeHtml(m.sender_name)}</div>
-  `;
+  el.innerHTML = `<div class="bubble">${contentHtml}</div><div class="meta">${escapeHtml(m.sender_name)}</div>`;
   box.appendChild(el);
   box.scrollTop = box.scrollHeight;
 }
@@ -587,10 +517,8 @@ async function downloadAndSaveFile(url, fileName, fileType, originalName, el) {
     const response = await fetch(url);
     const blob = await response.blob();
     await idbKeyval.set(fileName, blob);
-
     const filePath = url.split('/chat_files/')[1];
     if (filePath) await sb.storage.from('chat_files').remove([decodeURIComponent(filePath)]);
-
     if (el) {
       const objectUrl = URL.createObjectURL(blob);
       const bubble = el.querySelector('.bubble');
@@ -601,25 +529,14 @@ async function downloadAndSaveFile(url, fileName, fileType, originalName, el) {
   } catch (err) { console.error("فشل تحميل الملف: ", err); }
 }
 
-// ================== WEBRTC CALLS ==================
-let peerConnection = null;
+// ================== WEBRTC CALLS (Trystero) ==================
+let currentRoom = null;
 let localStream = null;
-let callChannel = null;
-let incomingCallData = null;
 let isCalling = false;
 let isCaller = false;
-let iceCandidatesQueue = []; 
+let incomingCallData = null;
 
-const rtcConfig = { 
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'turn:standard.relay.metered.ca:80', username: 'e8b8c8a0b8c8d8e8f8a8b8c8', credential: 'e8b8c8a0b8c8d8e8f8a8b8c8' },
-    { urls: 'turn:standard.relay.metered.ca:443', username: 'e8b8c8a0b8c8d8e8f8a8b8c8', credential: 'e8b8c8a0b8c8d8e8f8a8b8c8' },
-    { urls: 'turns:standard.relay.metered.ca:443', username: 'e8b8c8a0b8c8d8e8f8a8b8c8', credential: 'e8b8c8a0b8c8d8e8f8a8b8c8' }
-  ] 
-};
-
+// الاستماع للمكالمات الواردة (عبر Supabase Broadcast)
 function listenForIncomingCalls() {
   sb.channel(`incoming_calls_${currentUser.id}`)
     .on('broadcast', { event: 'call_offer' }, ({ payload }) => {
@@ -638,54 +555,34 @@ function listenForIncomingCalls() {
     .subscribe();
 }
 
+// بدء المكالمة (المتصل)
 async function startCall(isVideo) {
   if (isCalling || !currentChatId || currentChatType !== 'dm') return;
   isCalling = true;
   isCaller = true;
   
   showCallUI(isVideo, 'جارٍ الاتصال...');
-  if (!await setupMedia(isVideo)) return;
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: isVideo });
+    document.getElementById('localVideo').srcObject = localStream;
+  } catch (err) {
+    alert('لا يمكن الوصول للكاميرا/الميكروفون: ' + err.message);
+    endCall();
+    return;
+  }
 
-  setupPeerConnection();
-  
+  // إرسال إشعار للمتلقي
   const roomId = makeRoom(currentUser.id, currentChatId);
-  callChannel = sb.channel(`webrtc_${roomId}`, { config: { broadcast: { self: false } } });
-  
-  callChannel
-    .on('broadcast', { event: 'ready' }, async () => {
-      document.getElementById('callStatus').textContent = 'جارٍ التشفير...';
-      await new Promise(r => setTimeout(r, 1000));
-      const offer = await peerConnection.createOffer();
-      await peerConnection.setLocalDescription(offer);
-      callChannel.send({ type: 'broadcast', event: 'offer', payload: { offer } });
-    })
-    .on('broadcast', { event: 'answer' }, async ({ payload }) => {
-      await peerConnection.setRemoteDescription(new RTCSessionDescription(payload.answer));
-      processIceQueue(); 
-    })
-    .on('broadcast', { event: 'ice-candidate' }, async ({ payload }) => {
-      if (payload.candidate) {
-        if (peerConnection.remoteDescription) {
-          await peerConnection.addIceCandidate(new RTCIceCandidate(payload.candidate));
-        } else {
-          iceCandidatesQueue.push(payload.candidate);
-        }
-      }
-    })
-    .on('broadcast', { event: 'reject' }, () => {
-      alert('تم رفض المكالمة.');
-      endCall();
-    })
-    .subscribe((status) => {
-      if (status === 'SUBSCRIBED') {
-        sb.channel(`incoming_calls_${currentChatId}`).send({
-          type: 'broadcast', event: 'call_offer',
-          payload: { callerId: currentUser.id, callerName: currentUser.username, isVideo, roomId }
-        });
-      }
-    });
+  sb.channel(`incoming_calls_${currentChatId}`).send({
+    type: 'broadcast', event: 'call_offer',
+    payload: { callerId: currentUser.id, callerName: currentUser.username, isVideo, roomId }
+  });
+
+  // الانضمام إلى غرفة Trystero
+  joinTrysteroRoom(roomId, isVideo);
 }
 
+// قبول المكالمة (المتلقي)
 async function acceptCall() {
   document.getElementById('incomingCallPopup').style.display = 'none';
   if (!incomingCallData) return;
@@ -694,86 +591,41 @@ async function acceptCall() {
   isCaller = false;
   
   showCallUI(incomingCallData.isVideo, 'جارٍ الاتصال...');
-  if (!await setupMedia(incomingCallData.isVideo)) return;
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: incomingCallData.isVideo });
+    document.getElementById('localVideo').srcObject = localStream;
+  } catch (err) {
+    alert('لا يمكن الوصول للكاميرا/الميكروفون: ' + err.message);
+    rejectCall();
+    return;
+  }
 
-  setupPeerConnection();
-  
-  callChannel = sb.channel(`webrtc_${incomingCallData.roomId}`, { config: { broadcast: { self: false } } });
-  
-  callChannel
-    .on('broadcast', { event: 'offer' }, async ({ payload }) => {
-      await peerConnection.setRemoteDescription(new RTCSessionDescription(payload.offer));
-      processIceQueue(); 
-      const answer = await peerConnection.createAnswer();
-      await peerConnection.setLocalDescription(answer);
-      callChannel.send({ type: 'broadcast', event: 'answer', payload: { answer } });
-    })
-    .on('broadcast', { event: 'ice-candidate' }, async ({ payload }) => {
-      if (payload.candidate) {
-        if (peerConnection.remoteDescription) {
-          await peerConnection.addIceCandidate(new RTCIceCandidate(payload.candidate));
-        } else {
-          iceCandidatesQueue.push(payload.candidate);
-        }
-      }
-    })
-    .subscribe((status) => {
-      if (status === 'SUBSCRIBED') {
-        callChannel.send({ type: 'broadcast', event: 'ready' });
-      }
-    });
-  
+  // الانضمام إلى غرفة Trystero
+  joinTrysteroRoom(incomingCallData.roomId, incomingCallData.isVideo);
   incomingCallData = null;
 }
 
-function showCallUI(isVideo, statusText) {
-  document.getElementById('callOverlay').style.display = 'flex';
-  document.getElementById('callStatus').textContent = statusText;
-  document.getElementById('localVideo').style.display = isVideo ? 'block' : 'none';
-}
+// دالة مشتركة للانضمام إلى غرفة Trystero
+function joinTrysteroRoom(roomId, isVideo) {
+  if (currentRoom) currentRoom.leave();
+  currentRoom = Trystero.joinRoom(trysteroConfig, roomId);
 
-async function setupMedia(isVideo) {
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: isVideo });
-    document.getElementById('localVideo').srcObject = localStream;
-    return true;
-  } catch (err) {
-    alert('لا يمكن الوصول للكاميرا/الميكروفون: ' + err.message);
-    endCall();
-    return false;
-  }
-}
+  // إضافة التدفق المحلي
+  currentRoom.addStream(localStream);
 
-function setupPeerConnection() {
-  peerConnection = new RTCPeerConnection(rtcConfig);
-  localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-
-  peerConnection.ontrack = (event) => {
-    document.getElementById('remoteVideo').srcObject = event.streams[0];
-  };
-
-  peerConnection.onicecandidate = (event) => {
-    if (event.candidate && callChannel) {
-      callChannel.send({ type: 'broadcast', event: 'ice-candidate', payload: { candidate: event.candidate } });
-    }
-  };
-
-  peerConnection.oniceconnectionstatechange = () => {
-    if (peerConnection.iceConnectionState === 'connected' || peerConnection.iceConnectionState === 'completed') {
-      document.getElementById('callStatus').textContent = 'متصل 🟢';
-    } else if (peerConnection.iceConnectionState === 'failed' || peerConnection.iceConnectionState === 'disconnected') {
-      document.getElementById('callStatus').textContent = 'انقطع الاتصال 🔴';
-    }
-  };
-}
-
-function processIceQueue() {
-  iceCandidatesQueue.forEach(async (candidate) => {
-    try { await peerConnection.addIceCandidate(new RTCIceCandidate(candidate)); } catch(e){}
+  // استقبال تدفق الطرف الآخر
+  currentRoom.onPeerStream((stream, peerId) => {
+    document.getElementById('remoteVideo').srcObject = stream;
+    document.getElementById('callStatus').textContent = 'متصل 🟢';
   });
-  iceCandidatesQueue = [];
+
+  currentRoom.onPeerJoin(peerId => {
+    // عند انضمام الطرف الآخر، نضيف التدفق المحلي له
+    currentRoom.addStream(localStream, peerId);
+  });
 }
 
+// رفض المكالمة
 function rejectCall() {
   if (incomingCallData) {
     sb.channel(`incoming_calls_${incomingCallData.callerId}`).send({ type: 'broadcast', event: 'call_rejected', payload: {} });
@@ -782,6 +634,7 @@ function rejectCall() {
   document.getElementById('incomingCallPopup').style.display = 'none';
 }
 
+// كتم الصوت
 function toggleMute() {
   if (localStream) {
     const audioTrack = localStream.getAudioTracks()[0];
@@ -792,23 +645,28 @@ function toggleMute() {
   }
 }
 
+// إنهاء المكالمة
 function endCall() {
-  if (callChannel && isCaller) {
-    callChannel.send({ type: 'broadcast', event: 'reject', payload: {} });
+  if (currentRoom) {
+    currentRoom.leave();
+    currentRoom = null;
   }
-  
-  if (peerConnection) { peerConnection.close(); peerConnection = null; }
-  if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
-  if (callChannel) { sb.removeChannel(callChannel); callChannel = null; }
-  
+  if (localStream) {
+    localStream.getTracks().forEach(t => t.stop());
+    localStream = null;
+  }
   isCalling = false;
   isCaller = false;
-  iceCandidatesQueue = [];
-  
   document.getElementById('callOverlay').style.display = 'none';
   document.getElementById('remoteVideo').srcObject = null;
   document.getElementById('localVideo').srcObject = null;
   document.getElementById('muteBtn').textContent = '🎤';
+}
+
+function showCallUI(isVideo, statusText) {
+  document.getElementById('callOverlay').style.display = 'flex';
+  document.getElementById('callStatus').textContent = statusText;
+  document.getElementById('localVideo').style.display = isVideo ? 'block' : 'none';
 }
 
 // ================== HELPERS ==================

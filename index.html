@@ -3,11 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>دردشة متطورة</title>
+<title>دردشة ومكالمات متطورة</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/bcryptjs/2.4.3/bcrypt.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/idb-keyval@6/dist/umd.js"></script>
-<!-- استيراد مكتبة Trystero لاستراتيجية Supabase -->
-<script src="https://cdn.jsdelivr.net/npm/trystero@0.21.0/dist/trystero-supabase.min.js"></script>
 <style>
   :root {
     --bg: #1e1e2e; --bg-alt: #181825; --surface: #313244; --surface-hover: #45475a;
@@ -225,9 +223,6 @@
 const SUPABASE_URL = 'https://uongzuhnpngcrulvptuw.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_OIrvN5pAF8oCJkOEn4uucQ_DzuNQJQh';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-// إعدادات Trystero
-const trysteroConfig = { appId: SUPABASE_URL, supabaseKey: SUPABASE_ANON_KEY };
 
 let bcryptLib = typeof bcrypt !== 'undefined' ? bcrypt : (typeof dcodeIO !== 'undefined' ? dcodeIO.bcrypt : null);
 
@@ -529,14 +524,37 @@ async function downloadAndSaveFile(url, fileName, fileType, originalName, el) {
   } catch (err) { console.error("فشل تحميل الملف: ", err); }
 }
 
-// ================== WEBRTC CALLS (Trystero) ==================
-let currentRoom = null;
+// ================== WEBRTC CALLS (Supabase Realtime Signaling) ==================
+let pc = null;
 let localStream = null;
+let callChannel = null;
+let incomingCallData = null;
 let isCalling = false;
 let isCaller = false;
-let incomingCallData = null;
+let iceCandidatesQueue = [];
+let makingOffer = false;
+let ignoreOffer = false;
+let polite = false;
 
-// الاستماع للمكالمات الواردة (عبر Supabase Broadcast)
+const rtcConfig = { 
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    }
+  ] 
+};
+
+// الاستماع للمكالمات الواردة
 function listenForIncomingCalls() {
   sb.channel(`incoming_calls_${currentUser.id}`)
     .on('broadcast', { event: 'call_offer' }, ({ payload }) => {
@@ -555,12 +573,12 @@ function listenForIncomingCalls() {
     .subscribe();
 }
 
-// بدء المكالمة (المتصل)
 async function startCall(isVideo) {
   if (isCalling || !currentChatId || currentChatType !== 'dm') return;
   isCalling = true;
   isCaller = true;
-  
+  polite = false; // المتصل هو "غير مهذب"
+
   showCallUI(isVideo, 'جارٍ الاتصال...');
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: isVideo });
@@ -571,61 +589,129 @@ async function startCall(isVideo) {
     return;
   }
 
-  // إرسال إشعار للمتلقي
   const roomId = makeRoom(currentUser.id, currentChatId);
+  setupPeerConnection(roomId);
+
+  // إرسال إشعار للمتلقي
   sb.channel(`incoming_calls_${currentChatId}`).send({
     type: 'broadcast', event: 'call_offer',
     payload: { callerId: currentUser.id, callerName: currentUser.username, isVideo, roomId }
   });
 
-  // الانضمام إلى غرفة Trystero
-  joinTrysteroRoom(roomId, isVideo);
+  // إنشاء عرض (Offer) بعد تأخير بسيط للتأكد من اشتراك الطرف الآخر
+  setTimeout(async () => {
+    try {
+      makingOffer = true;
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      callChannel.send({ type: 'broadcast', event: 'offer', payload: { offer } });
+    } catch (err) {
+      console.error('Offer creation failed:', err);
+    } finally {
+      makingOffer = false;
+    }
+  }, 500);
 }
 
-// قبول المكالمة (المتلقي)
 async function acceptCall() {
   document.getElementById('incomingCallPopup').style.display = 'none';
   if (!incomingCallData) return;
-  
+
   isCalling = true;
   isCaller = false;
-  
+  polite = true; // المتلقي هو "مهذب"
+
   showCallUI(incomingCallData.isVideo, 'جارٍ الاتصال...');
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: incomingCallData.isVideo });
     document.getElementById('localVideo').srcObject = localStream;
   } catch (err) {
-    alert('لا يمكن الوصول للكاميرا/الميكروفون: ' + err.message);
+    alert('لا يمكن الوصول للكاميرا: ' + err.message);
     rejectCall();
     return;
   }
 
-  // الانضمام إلى غرفة Trystero
-  joinTrysteroRoom(incomingCallData.roomId, incomingCallData.isVideo);
+  setupPeerConnection(incomingCallData.roomId);
   incomingCallData = null;
 }
 
-// دالة مشتركة للانضمام إلى غرفة Trystero
-function joinTrysteroRoom(roomId, isVideo) {
-  if (currentRoom) currentRoom.leave();
-  currentRoom = Trystero.joinRoom(trysteroConfig, roomId);
+function setupPeerConnection(roomId) {
+  if (pc) pc.close();
+  pc = new RTCPeerConnection(rtcConfig);
+  iceCandidatesQueue = [];
 
-  // إضافة التدفق المحلي
-  currentRoom.addStream(localStream);
+  localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
-  // استقبال تدفق الطرف الآخر
-  currentRoom.onPeerStream((stream, peerId) => {
-    document.getElementById('remoteVideo').srcObject = stream;
+  pc.ontrack = (event) => {
+    document.getElementById('remoteVideo').srcObject = event.streams[0];
     document.getElementById('callStatus').textContent = 'متصل 🟢';
-  });
+  };
 
-  currentRoom.onPeerJoin(peerId => {
-    // عند انضمام الطرف الآخر، نضيف التدفق المحلي له
-    currentRoom.addStream(localStream, peerId);
-  });
+  pc.onicecandidate = (event) => {
+    if (event.candidate && callChannel) {
+      callChannel.send({ type: 'broadcast', event: 'ice-candidate', payload: { candidate: event.candidate } });
+    }
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+      document.getElementById('callStatus').textContent = 'متصل 🟢';
+    } else if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+      document.getElementById('callStatus').textContent = 'انقطع الاتصال 🔴';
+    }
+  };
+
+  // إعداد قناة الإشارة
+  callChannel = sb.channel(`call:${roomId}`, { config: { broadcast: { self: false } } });
+
+  callChannel
+    .on('broadcast', { event: 'offer' }, async ({ payload }) => {
+      // تطبيق Perfect Negotiation
+      const offerCollision = makingOffer || pc.signalingState !== 'stable';
+      ignoreOffer = !polite && offerCollision;
+      if (ignoreOffer) return;
+
+      await pc.setRemoteDescription(new RTCSessionDescription(payload.offer));
+      processIceQueue();
+
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      callChannel.send({ type: 'broadcast', event: 'answer', payload: { answer } });
+    })
+    .on('broadcast', { event: 'answer' }, async ({ payload }) => {
+      await pc.setRemoteDescription(new RTCSessionDescription(payload.answer));
+      processIceQueue();
+    })
+    .on('broadcast', { event: 'ice-candidate' }, async ({ payload }) => {
+      if (payload.candidate) {
+        if (pc.remoteDescription) {
+          try { await pc.addIceCandidate(new RTCIceCandidate(payload.candidate)); } catch (e) {}
+        } else {
+          iceCandidatesQueue.push(payload.candidate);
+        }
+      }
+    })
+    .on('broadcast', { event: 'reject' }, () => {
+      alert('تم رفض المكالمة.');
+      endCall();
+    })
+    .subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        // إذا كنا المتلقي، نرسل "جاهز" لنخبر المتصل ببدء الإرسال
+        if (!isCaller) {
+          callChannel.send({ type: 'broadcast', event: 'ready' });
+        }
+      }
+    });
 }
 
-// رفض المكالمة
+function processIceQueue() {
+  iceCandidatesQueue.forEach(async (candidate) => {
+    try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch(e){}
+  });
+  iceCandidatesQueue = [];
+}
+
 function rejectCall() {
   if (incomingCallData) {
     sb.channel(`incoming_calls_${incomingCallData.callerId}`).send({ type: 'broadcast', event: 'call_rejected', payload: {} });
@@ -634,7 +720,6 @@ function rejectCall() {
   document.getElementById('incomingCallPopup').style.display = 'none';
 }
 
-// كتم الصوت
 function toggleMute() {
   if (localStream) {
     const audioTrack = localStream.getAudioTracks()[0];
@@ -645,18 +730,21 @@ function toggleMute() {
   }
 }
 
-// إنهاء المكالمة
 function endCall() {
-  if (currentRoom) {
-    currentRoom.leave();
-    currentRoom = null;
+  if (callChannel) {
+    if (isCaller) callChannel.send({ type: 'broadcast', event: 'reject', payload: {} });
+    sb.removeChannel(callChannel);
+    callChannel = null;
   }
-  if (localStream) {
-    localStream.getTracks().forEach(t => t.stop());
-    localStream = null;
-  }
+  if (pc) { pc.close(); pc = null; }
+  if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
+  
   isCalling = false;
   isCaller = false;
+  iceCandidatesQueue = [];
+  makingOffer = false;
+  ignoreOffer = false;
+
   document.getElementById('callOverlay').style.display = 'none';
   document.getElementById('remoteVideo').srcObject = null;
   document.getElementById('localVideo').srcObject = null;

@@ -68,10 +68,13 @@
   
   .message-row { display: flex; gap: 15px; max-width: 85%; }
   .message-row.mine { align-self: flex-end; flex-direction: row-reverse; }
-  .message-bubble { background: var(--bg-sidebar); padding: 12px 16px; border-radius: 16px; border-top-right-radius: 4px; font-size: 0.95rem; line-height: 1.5; word-wrap: break-word; }
+  .message-bubble { background: var(--bg-sidebar); padding: 12px 16px; border-radius: 16px; border-top-right-radius: 4px; font-size: 0.95rem; line-height: 1.5; word-wrap: break-word; width: fit-content; max-width: 100%; }
   .message-row.mine .message-bubble { background: var(--primary); border-top-right-radius: 16px; border-top-left-radius: 4px; }
   .message-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; font-size: 0.8rem; }
-  .message-bubble img, .message-bubble video { max-width: 100%; border-radius: 12px; margin-top: 8px; display: block; background: #000; }
+  .message-bubble img, .message-bubble video, .message-bubble audio { max-width: 100%; border-radius: 12px; margin-top: 8px; display: block; background: #000; outline: none; }
+  
+  .file-link { display: inline-flex; align-items: center; gap: 8px; background: rgba(0,0,0,0.2); padding: 8px 12px; border-radius: 8px; color: inherit; text-decoration: none; margin-top: 8px; }
+  .file-link:hover { background: rgba(0,0,0,0.4); }
 
   #inputArea { padding: 15px 20px; background: var(--bg-chat); }
   .input-wrapper { background: var(--bg-sidebar); border-radius: 14px; display: flex; align-items: center; padding: 0 15px; border: 1px solid var(--border); }
@@ -234,17 +237,6 @@
   </div>
 </div>
 
-<!-- File Download Progress Modal -->
-<div id="p2pModal" class="modal-overlay">
-  <div class="modal-box">
-    <div class="modal-header"><h2>استلام ملف...</h2></div>
-    <div style="text-align:center; padding:20px;">
-      <div id="p2pStatus" style="margin-bottom:15px;">جارٍ التحميل...</div>
-      <progress id="p2pProgress" value="0" max="100" style="width:100%; height:20px;"></progress>
-    </div>
-  </div>
-</div>
-
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const SUPABASE_URL = 'https://uongzuhnpngcrulvptuw.supabase.co';
@@ -329,7 +321,6 @@ async function initApp() {
     if (status === 'SUBSCRIBED') await presenceChan.track({ username: currentUser.username });
   });
 
-  // الاستماع للتحديثات (لحظة انتهاء الرفع)
   globalChannel = sb.channel('global_msgs')
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => onNewMessage(payload.new))
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, (payload) => onUpdateMessage(payload.new))
@@ -521,9 +512,9 @@ async function sendMsg() {
 async function onNewMessage(m) {
   const isForMe = (currentChatType === 'group' && m.group_id === currentChatId) || (currentChatType === 'dm' && m.room === makeRoom(currentUser.id, currentChatId));
   
-  // إذا كان الملف مجزأ ولم ينتهِ رفعه بعد
-  if (m.is_chunked && m.is_uploading && m.sender_id !== currentUser.id) {
-    if (isForMe) await renderMsg(m); // عرض "جارٍ الرفع..."
+  if (m.is_chunked && !m.is_downloaded && m.sender_id !== currentUser.id) {
+    if (isForMe) await renderMsg(m); // عرض "جارٍ الاستلام"
+    triggerDownload(m); // بدء السحب الفوري
     return; 
   }
   
@@ -531,9 +522,9 @@ async function onNewMessage(m) {
 }
 
 async function onUpdateMessage(m) {
-  // إذا انتهى المرسل من رفع الأجزاء، نبدأ التحميل فوراً
+  const isForMe = (currentChatType === 'group' && m.group_id === currentChatId) || (currentChatType === 'dm' && m.room === makeRoom(currentUser.id, currentChatId));
   if (m.is_chunked && !m.is_uploading && !m.is_downloaded && m.sender_id !== currentUser.id) {
-    await downloadChunkedFile(m);
+    triggerDownload(m);
   }
 }
 
@@ -547,26 +538,29 @@ async function renderMsg(m) {
   
   let content = esc(m.content || '');
 
-  if (m.is_chunked) {
-    let localBlob = await idbKeyval.get(m.file_name);
+  if (m.is_chunked || m.file_url) {
+    const localBlob = await idbKeyval.get(m.file_name);
+    
     if (localBlob) {
       const mediaUrl = URL.createObjectURL(localBlob);
-      if (m.file_type.startsWith('image/')) content += `<br><img src="${mediaUrl}" loading="lazy">`;
-      else if (m.file_type.startsWith('video/')) content += `<br><video src="${mediaUrl}" controls playsinline></video>`;
-      else content += `<br><a href="${mediaUrl}" target="_blank" download>📄 تحميل الملف (${esc(m.file_name)})</a>`;
-    } else if (m.is_uploading) {
-      content += `<br><span style="color:var(--warning);">⏳ جارٍ رفع الملف...</span>`;
+      if (m.file_type.startsWith('image/')) {
+        content += `<br><img src="${mediaUrl}" loading="lazy">`;
+      } else if (m.file_type.startsWith('video/')) {
+        content += `<br><video src="${mediaUrl}" controls playsinline preload="metadata"></video>`;
+      } else if (m.file_type.startsWith('audio/')) {
+        content += `<br><audio src="${mediaUrl}" controls></audio>`;
+      } else {
+        content += `<br><a class="file-link" href="${mediaUrl}" download="${escAttr(m.file_name)}">📄 تحميل الملف: ${esc(m.file_name)}</a>`;
+      }
     } else {
-      content += `<br><span style="color:var(--warning);">⏳ جارٍ استلام الملف...</span>`;
+      // الملف غير موجود محلياً بعد
+      content += `<br><div style="background:rgba(255,255,255,0.1); padding:10px; border-radius:8px; margin-top:5px;">⏳ جارٍ استلام الملف (${esc(m.file_name)})... <span class="spinner">↻</span></div>`;
+      
+      // إذا كان الرابط موجوداً (ملف صغير) نحمله فوراً
+      if (m.file_url && !m.file_url.startsWith('chunks/') && !m.is_chunked) {
+        downloadSingleFile(m);
+      }
     }
-  } else if (m.file_url) {
-    let localBlob = await idbKeyval.get(m.file_name);
-    let mediaUrl = m.file_url;
-    if (localBlob) mediaUrl = URL.createObjectURL(localBlob);
-
-    if (m.file_type.startsWith('image/')) content += `<br><img src="${mediaUrl}" loading="lazy">`;
-    else if (m.file_type.startsWith('video/')) content += `<br><video src="${mediaUrl}" controls playsinline></video>`;
-    else content += `<br><a href="${mediaUrl}" target="_blank" download>📄 تحميل الملف (${esc(m.file_name)})</a>`;
   }
 
   const time = new Date(m.created_at).toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' });
@@ -581,7 +575,10 @@ async function renderMsg(m) {
   box.appendChild(el); box.scrollTop = box.scrollHeight;
 }
 
-// ================== Chunked File Handling (Fast & Responsive) ==================
+// ================== Background File Transfer (No Modals) ==================
+const CHUNK_SIZE = 3 * 1024 * 1024; // 3MB لكل قطعة
+const activeDownloads = new Set();
+
 async function handleFileSelect(input) {
   const file = input.files[0];
   if (!file || !currentChatId || currentChatType !== 'dm') {
@@ -595,157 +592,171 @@ async function handleFileSelect(input) {
   const isPeerOnline = onlineIds.has(peerId);
 
   if (isPeerOnline) {
-    uploadChunkedFile(file, peerId);
+    uploadChunkedFileBackground(file, peerId);
   } else {
     if (file.size > 20 * 1024 * 1024) {
-      return alert("المستخدم غير متصل. الحد الأقصى لإرسال ملف له وهو غير متصل هو 20 ميجابايت.");
+      return alert("المستخدم غير متصل. الحد الأقصى 20 ميجابايت. اطلب منه الاتصال أولاً.");
     }
     uploadSingleFile(file, peerId);
   }
 }
 
-// 1. رفع ملف صغير (للمستخدمين غير المتصلين)
+// رفع ملف صغير
 async function uploadSingleFile(file, peerId) {
-  const msgInput = document.getElementById('msgInput');
-  let originalPlaceholder = msgInput.placeholder;
-  msgInput.placeholder = "جارٍ رفع الملف...";
-  msgInput.disabled = true;
-
   try {
     await idbKeyval.set(file.name, file);
-
     const filePath = `${currentUser.id}_${Date.now()}_${file.name}`;
-    const { error: uploadErr } = await sb.storage.from('chat_files').upload(filePath, file);
-    if (uploadErr) throw uploadErr;
-
+    const { error: upErr } = await sb.storage.from('chat_files').upload(filePath, file);
+    if (upErr) throw upErr;
     const { data: urlData } = sb.storage.from('chat_files').getPublicUrl(filePath);
     
     const data = { 
-      sender_id: currentUser.id, sender_name: currentUser.username, 
-      content: '', file_url: urlData.publicUrl, file_type: file.type, file_name: file.name,
+      sender_id: currentUser.id, sender_name: currentUser.username, content: '', 
+      file_url: urlData.publicUrl, file_type: file.type, file_name: file.name,
       receiver_id: peerId, room: makeRoom(currentUser.id, peerId),
       is_chunked: false, is_downloaded: false
     };
-
-    const { data: inserted, error } = await sb.from('messages').insert(data).select().single();
+    const { data: ins, error } = await sb.from('messages').insert(data).select().single();
     if (error) throw error;
-    await renderMsg(inserted);
-  } catch (e) {
-    alert("فشل الرفع: " + e.message);
-  } finally {
-    msgInput.placeholder = originalPlaceholder;
-    msgInput.disabled = false;
-  }
+    await renderMsg(ins);
+  } catch (e) { alert("فشل الرفع: " + e.message); }
 }
 
-// 2. رفع ملف كبير (تقسيم لأجزاء 20 ميجا) بسرعة وبدون تعليق
-async function uploadChunkedFile(file, peerId) {
-  const chunkSize = 20 * 1024 * 1024; 
-  const totalChunks = Math.ceil(file.size / chunkSize);
+// رفع ملف كبير في الخلفية (بدون تعليق الواجهة)
+async function uploadChunkedFileBackground(file, peerId) {
+  const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
   const uploadId = genUUID();
   
-  const msgInput = document.getElementById('msgInput');
-  let originalPlaceholder = msgInput.placeholder;
-  msgInput.disabled = true;
-
+  // إدراج الرسالة فوراً
+  const data = { 
+    sender_id: currentUser.id, sender_name: currentUser.username, content: '', 
+    file_url: uploadId, file_type: file.type, file_name: file.name,
+    receiver_id: peerId, room: makeRoom(currentUser.id, peerId),
+    is_chunked: true, total_chunks: totalChunks, is_downloaded: false, is_uploading: true
+  };
+  
   try {
-    // 1. إرسال إشعار فوري للطرف الآخر
-    const data = { 
-      sender_id: currentUser.id, sender_name: currentUser.username, 
-      content: '', file_url: uploadId, file_type: file.type, file_name: file.name,
-      receiver_id: peerId, room: makeRoom(currentUser.id, peerId),
-      is_chunked: true, total_chunks: totalChunks, is_downloaded: false, is_uploading: true
-    };
-    const { data: inserted, error: dbErr } = await sb.from('messages').insert(data).select().single();
+    const { data: ins, error: dbErr } = await sb.from('messages').insert(data).select().single();
     if (dbErr) throw dbErr;
-    await renderMsg(inserted);
+    
+    await idbKeyval.set(file.name, file); 
+    await renderMsg(ins); // تظهر الرسالة فوراً للمرسل
 
-    // 2. الرفع بدفعات (5 أجزاء معاً) لتجنب التعليق
-    const BATCH_SIZE = 5;
-    for (let i = 0; i < totalChunks; i += BATCH_SIZE) {
-      const batch = [];
-      for (let j = i; j < Math.min(i + BATCH_SIZE, totalChunks); j++) {
-        const start = j * chunkSize;
-        const end = Math.min(start + chunkSize, file.size);
+    // الرفع في الخلفية دون حجب الإدخال
+    (async () => {
+      let failed = false;
+      for (let i = 0; i < totalChunks; i++) {
+        if (failed) break;
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
         const chunk = file.slice(start, end);
-        const path = `chunks/${uploadId}/${j}`;
+        const path = `chunks/${uploadId}/${i}`;
         
-        batch.push(sb.storage.from('chat_files').upload(path, chunk, { upsert: true }).then(res => {
-          if (res.error) throw res.error;
-          return res;
-        }));
+        try {
+          const { error } = await sb.storage.from('chat_files').upload(path, chunk, { upsert: true });
+          if (error) throw error;
+        } catch (err) {
+          console.error("فشل رفع القطعة " + i, err);
+          failed = true;
+          alert("انقطع الاتصال أثناء رفع الملف.");
+        }
       }
       
-      await Promise.all(batch);
-      msgInput.placeholder = `جارٍ رفع الأجزاء (${Math.min(i + BATCH_SIZE, totalChunks)}/${totalChunks})...`;
-    }
-    
-    // 3. إعلام الطرف الآخر بانتهاء الرفع ليبدأ التحميل فوراً
-    await sb.from('messages').update({ is_uploading: false }).eq('id', inserted.id);
-    await idbKeyval.set(file.name, file); 
-    
-  } catch (e) {
-    alert("فشل الرفع: " + e.message);
-  } finally {
-    msgInput.placeholder = originalPlaceholder;
-    msgInput.disabled = false;
-  }
+      if (!failed) {
+        await sb.from('messages').update({ is_uploading: false }).eq('id', ins.id);
+      } else {
+        // تنظيف في حال الفشل
+        const toDelete = [];
+        for (let i = 0; i < totalChunks; i++) toDelete.push(`chunks/${uploadId}/${i}`);
+        await sb.storage.from('chat_files').remove(toDelete);
+      }
+    })();
+
+  } catch (e) { alert("خطأ: " + e.message); }
 }
 
-// 3. تحميل الملف المجزأ (للمستقبل) بسرعة
-async function downloadChunkedFile(m) {
-  const totalChunks = m.total_chunks;
-  
-  openModal('p2pModal');
-  document.getElementById('p2pStatus').textContent = `جارٍ تحميل الأجزاء...`;
-  document.getElementById('p2pProgress').value = 0;
-
+// تحميل ملف صغير
+async function downloadSingleFile(m) {
+  if (activeDownloads.has(m.id)) return;
+  activeDownloads.add(m.id);
   try {
-    const chunks = [];
-    const BATCH_SIZE = 5; // تحميل 5 أجزاء معاً
+    const res = await fetch(m.file_url);
+    const blob = await res.blob();
+    await idbKeyval.set(m.file_name, blob);
+    await sb.from('messages').update({ is_downloaded: true }).eq('id', m.id);
     
-    for (let i = 0; i < totalChunks; i += BATCH_SIZE) {
-      const batch = [];
-      for (let j = i; j < Math.min(i + BATCH_SIZE, totalChunks); j++) {
-        const path = `chunks/${m.file_url}/${j}`;
-        batch.push(sb.storage.from('chat_files').download(path).then(res => {
-          if (res.error) throw res.error;
-          return res.data;
-        }));
+    // حذف من السيرفر بعد التحميل
+    const filePath = m.file_url.split('/chat_files/')[1];
+    if (filePath) await sb.storage.from('chat_files').remove([decodeURIComponent(filePath)]);
+    
+    refreshCurrentChat();
+  } catch (e) { console.error(e); }
+  finally { activeDownloads.delete(m.id); }
+}
+
+// نظام السحب اللحظي (Pull) للملفات المجزأة
+async function triggerDownload(m) {
+  if (activeDownloads.has(m.id)) return;
+  activeDownloads.add(m.id);
+  
+  const totalChunks = m.total_chunks;
+  const chunks = [];
+  
+  try {
+    // السحب اللحظي: نحاول تحميل القطع واحدة تلو الأخرى
+    // إذا لم تكن القطعة موجودة بعد (404)، ننتظر ثانية ونحاول مجدداً
+    for (let i = 0; i < totalChunks; i++) {
+      const path = `chunks/${m.file_url}/${i}`;
+      let chunkData = null;
+      let retries = 0;
+      
+      while (!chunkData && retries < 120) { // الانتظار حتى دقيقتين كحد أقصى للقطعة الواحدة
+        // التحقق إذا كان المستخدم أغلق الدردشة (لتوفير الموارد)
+        if (currentChatId !== m.sender_id && currentChatType === 'dm' && currentChatId !== m.receiver_id) break;
+
+        try {
+          const res = await sb.storage.from('chat_files').download(path);
+          if (!res.error) {
+            chunkData = res.data;
+          } else {
+            await new Promise(r => setTimeout(r, 1000)); // انتظر ثانية
+            retries++;
+          }
+        } catch (err) {
+          await new Promise(r => setTimeout(r, 1000));
+          retries++;
+        }
       }
       
-      const results = await Promise.all(batch);
-      chunks.push(...results);
-      
-      document.getElementById('p2pProgress').value = (Math.min(i + BATCH_SIZE, totalChunks) / totalChunks) * 100;
-      document.getElementById('p2pStatus').textContent = `تم تحميل ${Math.min(i + BATCH_SIZE, totalChunks)} من ${totalChunks}...`;
+      if (!chunkData) throw new Error("انتهت مهلة استلام القطعة");
+      chunks.push(chunkData);
     }
     
     const blob = new Blob(chunks, { type: m.file_type });
     await idbKeyval.set(m.file_name, blob);
     
-    // مسح الأجزاء من السيرفر فوراً
-    const filesToRemove = Array.from({ length: totalChunks }, (_, i) => `chunks/${m.file_url}/${i}`);
-    await sb.storage.from('chat_files').remove(filesToRemove);
+    // تنظيف السيرفر
+    const toRemove = Array.from({ length: totalChunks }, (_, i) => `chunks/${m.file_url}/${i}`);
+    await sb.storage.from('chat_files').remove(toRemove);
     await sb.from('messages').update({ is_downloaded: true }).eq('id', m.id);
     
-    closeModal('p2pModal');
-    
-    // تحديث الدردشة
-    if ((currentChatType === 'dm' && m.sender_id === currentChatId) || (currentChatType === 'group' && m.group_id === currentChatId)) {
-      document.getElementById('messagesArea').innerHTML = '';
-      renderedMsgIds.clear();
-      openChat(currentChatId, document.getElementById('chatTitle').textContent, currentChatType);
-    }
+    refreshCurrentChat();
     
   } catch (e) {
-    console.error(e);
-    alert("فشل التحميل: " + e.message);
-    closeModal('p2pModal');
+    console.error("فشل التحميل", e);
+  } finally {
+    activeDownloads.delete(m.id);
   }
 }
 
-// 4. التحميل التلقائي للملفات عند الدخول
+function refreshCurrentChat() {
+  if (!currentChatId) return;
+  document.getElementById('messagesArea').innerHTML = '';
+  renderedMsgIds.clear();
+  openChat(currentChatId, document.getElementById('chatTitle').textContent, currentChatType);
+}
+
+// التحميل التلقائي عند الدخول للمحادثة
 async function autoDownloadOfflineFiles() {
   const { data: msgs } = await sb.from('messages').select('*')
     .eq('receiver_id', currentUser.id)
@@ -756,17 +767,9 @@ async function autoDownloadOfflineFiles() {
 
   for (const m of msgs) {
     if (m.is_chunked) {
-      if (!m.is_uploading) await downloadChunkedFile(m); 
+      if (!m.is_uploading) triggerDownload(m); 
     } else {
-      try {
-        const res = await fetch(m.file_url);
-        const blob = await res.blob();
-        await idbKeyval.set(m.file_name, blob);
-        await sb.from('messages').update({ is_downloaded: true }).eq('id', m.id);
-        
-        const filePath = m.file_url.split('/chat_files/')[1];
-        if (filePath) await sb.storage.from('chat_files').remove([decodeURIComponent(filePath)]);
-      } catch (err) { console.error("Auto-download failed:", err); }
+      downloadSingleFile(m);
     }
   }
 }
@@ -802,6 +805,14 @@ async function deleteAllLocalFiles() {
   renderLocalFiles();
   alert("تم حذف جميع الملفات.");
 }
+
+// إضافة CSS للسبينر
+const style = document.createElement('style');
+style.textContent = `
+  .spinner { display: inline-block; animation: spin 1s linear infinite; margin-left: 5px; }
+  @keyframes spin { 100% { transform: rotate(360deg); } }
+`;
+document.head.appendChild(style);
 
 // ================== Boot ==================
 (function boot() {

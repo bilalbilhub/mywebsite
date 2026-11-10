@@ -329,8 +329,10 @@ async function initApp() {
     if (status === 'SUBSCRIBED') await presenceChan.track({ username: currentUser.username });
   });
 
+  // الاستماع للتحديثات (لحظة انتهاء الرفع)
   globalChannel = sb.channel('global_msgs')
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => onNewMessage(payload.new))
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, (payload) => onUpdateMessage(payload.new))
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'friendships' }, (payload) => onNewFriendRequest(payload.new))
     .subscribe();
 
@@ -519,12 +521,20 @@ async function sendMsg() {
 async function onNewMessage(m) {
   const isForMe = (currentChatType === 'group' && m.group_id === currentChatId) || (currentChatType === 'dm' && m.room === makeRoom(currentUser.id, currentChatId));
   
-  if (m.is_chunked && !m.is_downloaded && m.sender_id !== currentUser.id) {
-    await downloadChunkedFile(m);
+  // إذا كان الملف مجزأ ولم ينتهِ رفعه بعد
+  if (m.is_chunked && m.is_uploading && m.sender_id !== currentUser.id) {
+    if (isForMe) await renderMsg(m); // عرض "جارٍ الرفع..."
     return; 
   }
   
   if (isForMe) await renderMsg(m);
+}
+
+async function onUpdateMessage(m) {
+  // إذا انتهى المرسل من رفع الأجزاء، نبدأ التحميل فوراً
+  if (m.is_chunked && !m.is_uploading && !m.is_downloaded && m.sender_id !== currentUser.id) {
+    await downloadChunkedFile(m);
+  }
 }
 
 async function renderMsg(m) {
@@ -544,6 +554,8 @@ async function renderMsg(m) {
       if (m.file_type.startsWith('image/')) content += `<br><img src="${mediaUrl}" loading="lazy">`;
       else if (m.file_type.startsWith('video/')) content += `<br><video src="${mediaUrl}" controls playsinline></video>`;
       else content += `<br><a href="${mediaUrl}" target="_blank" download>📄 تحميل الملف (${esc(m.file_name)})</a>`;
+    } else if (m.is_uploading) {
+      content += `<br><span style="color:var(--warning);">⏳ جارٍ رفع الملف...</span>`;
     } else {
       content += `<br><span style="color:var(--warning);">⏳ جارٍ استلام الملف...</span>`;
     }
@@ -569,7 +581,7 @@ async function renderMsg(m) {
   box.appendChild(el); box.scrollTop = box.scrollHeight;
 }
 
-// ================== Chunked File Handling (Instead of WebRTC) ==================
+// ================== Chunked File Handling (Fast & Responsive) ==================
 async function handleFileSelect(input) {
   const file = input.files[0];
   if (!file || !currentChatId || currentChatType !== 'dm') {
@@ -583,10 +595,8 @@ async function handleFileSelect(input) {
   const isPeerOnline = onlineIds.has(peerId);
 
   if (isPeerOnline) {
-    // الطرف الآخر متصل -> تقسيم الملف لأجزاء ورفعه
     uploadChunkedFile(file, peerId);
   } else {
-    // الطرف الآخر غير متصل -> الحد الأقصى 20 ميجا
     if (file.size > 20 * 1024 * 1024) {
       return alert("المستخدم غير متصل. الحد الأقصى لإرسال ملف له وهو غير متصل هو 20 ميجابايت.");
     }
@@ -594,7 +604,7 @@ async function handleFileSelect(input) {
   }
 }
 
-// 1. رفع ملف بحجم صغير (للمستخدمين غير المتصلين)
+// 1. رفع ملف صغير (للمستخدمين غير المتصلين)
 async function uploadSingleFile(file, peerId) {
   const msgInput = document.getElementById('msgInput');
   let originalPlaceholder = msgInput.placeholder;
@@ -628,49 +638,51 @@ async function uploadSingleFile(file, peerId) {
   }
 }
 
-// 2. رفع ملف كبير (تقسيم لأجزاء 20 ميجا) للمستخدمين المتصلين
+// 2. رفع ملف كبير (تقسيم لأجزاء 20 ميجا) بسرعة وبدون تعليق
 async function uploadChunkedFile(file, peerId) {
-  const chunkSize = 20 * 1024 * 1024; // 20MB
+  const chunkSize = 20 * 1024 * 1024; 
   const totalChunks = Math.ceil(file.size / chunkSize);
   const uploadId = genUUID();
   
   const msgInput = document.getElementById('msgInput');
   let originalPlaceholder = msgInput.placeholder;
   msgInput.disabled = true;
-  
+
   try {
-    const uploadPromises = [];
-    let completed = 0;
-    
-    for (let i = 0; i < totalChunks; i++) {
-      const start = i * chunkSize;
-      const end = Math.min(start + chunkSize, file.size);
-      const chunk = file.slice(start, end);
-      const path = `chunks/${uploadId}/${i}`;
-      
-      // رفع الأجزاء بالتوازي لسرعة فائقة
-      const promise = sb.storage.from('chat_files').upload(path, chunk, { cacheControl: '3600', upsert: true }).then(res => {
-        if (res.error) throw res.error;
-        completed++;
-        msgInput.placeholder = `جارٍ رفع الأجزاء (${completed}/${totalChunks})...`;
-        return res;
-      });
-      uploadPromises.push(promise);
-    }
-    
-    await Promise.all(uploadPromises);
-    
+    // 1. إرسال إشعار فوري للطرف الآخر
     const data = { 
       sender_id: currentUser.id, sender_name: currentUser.username, 
       content: '', file_url: uploadId, file_type: file.type, file_name: file.name,
       receiver_id: peerId, room: makeRoom(currentUser.id, peerId),
-      is_chunked: true, total_chunks: totalChunks, is_downloaded: false
+      is_chunked: true, total_chunks: totalChunks, is_downloaded: false, is_uploading: true
     };
     const { data: inserted, error: dbErr } = await sb.from('messages').insert(data).select().single();
     if (dbErr) throw dbErr;
-    
     await renderMsg(inserted);
-    await idbKeyval.set(file.name, file); // حفظ نسخة محلية للمرسل
+
+    // 2. الرفع بدفعات (5 أجزاء معاً) لتجنب التعليق
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < totalChunks; i += BATCH_SIZE) {
+      const batch = [];
+      for (let j = i; j < Math.min(i + BATCH_SIZE, totalChunks); j++) {
+        const start = j * chunkSize;
+        const end = Math.min(start + chunkSize, file.size);
+        const chunk = file.slice(start, end);
+        const path = `chunks/${uploadId}/${j}`;
+        
+        batch.push(sb.storage.from('chat_files').upload(path, chunk, { upsert: true }).then(res => {
+          if (res.error) throw res.error;
+          return res;
+        }));
+      }
+      
+      await Promise.all(batch);
+      msgInput.placeholder = `جارٍ رفع الأجزاء (${Math.min(i + BATCH_SIZE, totalChunks)}/${totalChunks})...`;
+    }
+    
+    // 3. إعلام الطرف الآخر بانتهاء الرفع ليبدأ التحميل فوراً
+    await sb.from('messages').update({ is_uploading: false }).eq('id', inserted.id);
+    await idbKeyval.set(file.name, file); 
     
   } catch (e) {
     alert("فشل الرفع: " + e.message);
@@ -680,7 +692,7 @@ async function uploadChunkedFile(file, peerId) {
   }
 }
 
-// 3. تحميل الملف المجزأ (للمستقبل)
+// 3. تحميل الملف المجزأ (للمستقبل) بسرعة
 async function downloadChunkedFile(m) {
   const totalChunks = m.total_chunks;
   
@@ -689,36 +701,37 @@ async function downloadChunkedFile(m) {
   document.getElementById('p2pProgress').value = 0;
 
   try {
-    const downloadPromises = [];
-    let completed = 0;
+    const chunks = [];
+    const BATCH_SIZE = 5; // تحميل 5 أجزاء معاً
     
-    for (let i = 0; i < totalChunks; i++) {
-      const path = `chunks/${m.file_url}/${i}`;
-      // تحميل الأجزاء بالتوازي لسرعة فائقة
-      const promise = sb.storage.from('chat_files').download(path).then(res => {
-        if (res.error) throw res.error;
-        completed++;
-        document.getElementById('p2pProgress').value = (completed / totalChunks) * 100;
-        document.getElementById('p2pStatus').textContent = `تم تحميل ${completed} من ${totalChunks}...`;
-        return res.data;
-      });
-      downloadPromises.push(promise);
+    for (let i = 0; i < totalChunks; i += BATCH_SIZE) {
+      const batch = [];
+      for (let j = i; j < Math.min(i + BATCH_SIZE, totalChunks); j++) {
+        const path = `chunks/${m.file_url}/${j}`;
+        batch.push(sb.storage.from('chat_files').download(path).then(res => {
+          if (res.error) throw res.error;
+          return res.data;
+        }));
+      }
+      
+      const results = await Promise.all(batch);
+      chunks.push(...results);
+      
+      document.getElementById('p2pProgress').value = (Math.min(i + BATCH_SIZE, totalChunks) / totalChunks) * 100;
+      document.getElementById('p2pStatus').textContent = `تم تحميل ${Math.min(i + BATCH_SIZE, totalChunks)} من ${totalChunks}...`;
     }
-    
-    const chunks = await Promise.all(downloadPromises);
     
     const blob = new Blob(chunks, { type: m.file_type });
     await idbKeyval.set(m.file_name, blob);
     
-    // مسح الأجزاء من السيرفر بعد تجميعها
+    // مسح الأجزاء من السيرفر فوراً
     const filesToRemove = Array.from({ length: totalChunks }, (_, i) => `chunks/${m.file_url}/${i}`);
     await sb.storage.from('chat_files').remove(filesToRemove);
-    
     await sb.from('messages').update({ is_downloaded: true }).eq('id', m.id);
     
     closeModal('p2pModal');
     
-    // تحديث الدردشة إذا كانت مفتوحة
+    // تحديث الدردشة
     if ((currentChatType === 'dm' && m.sender_id === currentChatId) || (currentChatType === 'group' && m.group_id === currentChatId)) {
       document.getElementById('messagesArea').innerHTML = '';
       renderedMsgIds.clear();
@@ -732,7 +745,7 @@ async function downloadChunkedFile(m) {
   }
 }
 
-// 4. التحميل التلقائي للملفات عند الدخول (للمستخدمين غير المتصلين سابقاً)
+// 4. التحميل التلقائي للملفات عند الدخول
 async function autoDownloadOfflineFiles() {
   const { data: msgs } = await sb.from('messages').select('*')
     .eq('receiver_id', currentUser.id)
@@ -743,7 +756,7 @@ async function autoDownloadOfflineFiles() {
 
   for (const m of msgs) {
     if (m.is_chunked) {
-      await downloadChunkedFile(m); 
+      if (!m.is_uploading) await downloadChunkedFile(m); 
     } else {
       try {
         const res = await fetch(m.file_url);

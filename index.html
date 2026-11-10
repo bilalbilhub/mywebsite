@@ -234,12 +234,12 @@
   </div>
 </div>
 
-<!-- WebRTC P2P Receiver Modal -->
+<!-- File Download Progress Modal -->
 <div id="p2pModal" class="modal-overlay">
   <div class="modal-box">
     <div class="modal-header"><h2>استلام ملف...</h2></div>
     <div style="text-align:center; padding:20px;">
-      <div id="p2pStatus" style="margin-bottom:15px;">جارٍ الاتصال بالمرسل...</div>
+      <div id="p2pStatus" style="margin-bottom:15px;">جارٍ التحميل...</div>
       <progress id="p2pProgress" value="0" max="100" style="width:100%; height:20px;"></progress>
     </div>
   </div>
@@ -257,13 +257,7 @@ let renderedMsgIds = new Set();
 let friendsCache = [], groupsCache = [], requestsCache = [];
 let presenceChan = null;
 let globalChannel = null;
-
-// WebRTC Variables
-let p2pChannel = null;
-let peerConnection = null;
-let dataChannel = null;
-let receivedChunks = [];
-let receivedFileMeta = null;
+let allUsersCache = [];
 
 // ================== Helpers ==================
 function toggleSidebar() { document.getElementById('sidebar').classList.toggle('open'); }
@@ -278,6 +272,7 @@ function getAvatarColor(name) {
 function makeRoom(a, b) { return [a, b].sort().join('__'); }
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function escAttr(s) { return String(s).replace(/'/g, "\\'"); }
+function genUUID() { return Date.now().toString(36) + Math.random().toString(36).substr(2); }
 
 // ================== Auth ==================
 let authMode = 'login';
@@ -339,20 +334,13 @@ async function initApp() {
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'friendships' }, (payload) => onNewFriendRequest(payload.new))
     .subscribe();
 
-  p2pChannel = sb.channel(`p2p_${currentUser.id}`)
-    .on('broadcast', { event: 'p2p_offer' }, handleP2POffer)
-    .on('broadcast', { event: 'p2p_answer' }, handleP2PAnswer)
-    .on('broadcast', { event: 'p2p_ice' }, handleP2PIce)
-    .subscribe();
-
   await loadAllData();
   autoDownloadOfflineFiles();
 }
 
-// ================== Data Loading (FIXED) ==================
+// ================== Data Loading ==================
 async function loadAllData() {
   try {
-    // 1. جلب الأصدقاء والطلبات (تم إصلاح الاستعلام ليعمل بدون أخطاء)
     const { data: fr, error: frError } = await sb.from('friendships')
       .select('*, sender:site_users!sender_id(username), receiver:site_users!receiver_id(username)')
       .or(`sender_id.eq.${currentUser.id},receiver_id.eq.${currentUser.id}`);
@@ -364,7 +352,6 @@ async function loadAllData() {
     
     friendsCache = accepted.map(f => f.sender_id === currentUser.id ? { id: f.receiver_id, username: f.receiver?.username || 'مستخدم' } : { id: f.sender_id, username: f.sender?.username || 'مستخدم' });
 
-    // 2. جلب المجموعات
     const { data: mems, error: memsError } = await sb.from('group_members').select('group_id').eq('user_id', currentUser.id);
     if (memsError) console.error("خطأ في جلب مجموعات المستخدم:", memsError);
     
@@ -374,7 +361,6 @@ async function loadAllData() {
       groupsCache = grps || [];
     } else { groupsCache = []; }
 
-    // 3. رسم القوائم
     renderRequests(); 
     renderFriendsList(); 
     renderGroupsList();
@@ -532,6 +518,12 @@ async function sendMsg() {
 
 async function onNewMessage(m) {
   const isForMe = (currentChatType === 'group' && m.group_id === currentChatId) || (currentChatType === 'dm' && m.room === makeRoom(currentUser.id, currentChatId));
+  
+  if (m.is_chunked && !m.is_downloaded && m.sender_id !== currentUser.id) {
+    await downloadChunkedFile(m);
+    return; 
+  }
+  
   if (isForMe) await renderMsg(m);
 }
 
@@ -545,7 +537,17 @@ async function renderMsg(m) {
   
   let content = esc(m.content || '');
 
-  if (m.file_url) {
+  if (m.is_chunked) {
+    let localBlob = await idbKeyval.get(m.file_name);
+    if (localBlob) {
+      const mediaUrl = URL.createObjectURL(localBlob);
+      if (m.file_type.startsWith('image/')) content += `<br><img src="${mediaUrl}" loading="lazy">`;
+      else if (m.file_type.startsWith('video/')) content += `<br><video src="${mediaUrl}" controls playsinline></video>`;
+      else content += `<br><a href="${mediaUrl}" target="_blank" download>📄 تحميل الملف (${esc(m.file_name)})</a>`;
+    } else {
+      content += `<br><span style="color:var(--warning);">⏳ جارٍ استلام الملف...</span>`;
+    }
+  } else if (m.file_url) {
     let localBlob = await idbKeyval.get(m.file_name);
     let mediaUrl = m.file_url;
     if (localBlob) mediaUrl = URL.createObjectURL(localBlob);
@@ -553,16 +555,6 @@ async function renderMsg(m) {
     if (m.file_type.startsWith('image/')) content += `<br><img src="${mediaUrl}" loading="lazy">`;
     else if (m.file_type.startsWith('video/')) content += `<br><video src="${mediaUrl}" controls playsinline></video>`;
     else content += `<br><a href="${mediaUrl}" target="_blank" download>📄 تحميل الملف (${esc(m.file_name)})</a>`;
-  } else if (m.is_p2p) {
-    let localBlob = await idbKeyval.get(m.file_name);
-    if (localBlob) {
-      const mediaUrl = URL.createObjectURL(localBlob);
-      if (m.file_type.startsWith('image/')) content += `<br><img src="${mediaUrl}">`;
-      else if (m.file_type.startsWith('video/')) content += `<br><video src="${mediaUrl}" controls playsinline></video>`;
-      else content += `<br><a href="${mediaUrl}" target="_blank" download>📄 تحميل الملف (${esc(m.file_name)})</a>`;
-    } else {
-      content += `<br><span style="color:var(--warning);">⏳ ملف P2P (سيتم استلامه عند اتصال المرسل)</span>`;
-    }
   }
 
   const time = new Date(m.created_at).toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' });
@@ -577,7 +569,7 @@ async function renderMsg(m) {
   box.appendChild(el); box.scrollTop = box.scrollHeight;
 }
 
-// ================== File Sending Logic ==================
+// ================== Chunked File Handling (Instead of WebRTC) ==================
 async function handleFileSelect(input) {
   const file = input.files[0];
   if (!file || !currentChatId || currentChatType !== 'dm') {
@@ -591,19 +583,22 @@ async function handleFileSelect(input) {
   const isPeerOnline = onlineIds.has(peerId);
 
   if (isPeerOnline) {
-    startP2PTransfer(file, peerId);
+    // الطرف الآخر متصل -> تقسيم الملف لأجزاء ورفعه
+    uploadChunkedFile(file, peerId);
   } else {
+    // الطرف الآخر غير متصل -> الحد الأقصى 20 ميجا
     if (file.size > 20 * 1024 * 1024) {
-      return alert("المستخدم غير متصل. الحد الأقصى 20 ميجابايت. يرجى الانتظار حتى يتصل.");
+      return alert("المستخدم غير متصل. الحد الأقصى لإرسال ملف له وهو غير متصل هو 20 ميجابايت.");
     }
-    uploadToSupabase(file, peerId);
+    uploadSingleFile(file, peerId);
   }
 }
 
-// ================== Supabase Storage (Offline Fallback) ==================
-async function uploadToSupabase(file, peerId) {
+// 1. رفع ملف بحجم صغير (للمستخدمين غير المتصلين)
+async function uploadSingleFile(file, peerId) {
   const msgInput = document.getElementById('msgInput');
-  msgInput.placeholder = "جارٍ رفع الملف إلى السيرفر...";
+  let originalPlaceholder = msgInput.placeholder;
+  msgInput.placeholder = "جارٍ رفع الملف...";
   msgInput.disabled = true;
 
   try {
@@ -619,7 +614,7 @@ async function uploadToSupabase(file, peerId) {
       sender_id: currentUser.id, sender_name: currentUser.username, 
       content: '', file_url: urlData.publicUrl, file_type: file.type, file_name: file.name,
       receiver_id: peerId, room: makeRoom(currentUser.id, peerId),
-      is_p2p: false, is_downloaded: false
+      is_chunked: false, is_downloaded: false
     };
 
     const { data: inserted, error } = await sb.from('messages').insert(data).select().single();
@@ -628,163 +623,139 @@ async function uploadToSupabase(file, peerId) {
   } catch (e) {
     alert("فشل الرفع: " + e.message);
   } finally {
-    msgInput.placeholder = "اكتب رسالتك...";
+    msgInput.placeholder = originalPlaceholder;
     msgInput.disabled = false;
   }
 }
 
+// 2. رفع ملف كبير (تقسيم لأجزاء 20 ميجا) للمستخدمين المتصلين
+async function uploadChunkedFile(file, peerId) {
+  const chunkSize = 20 * 1024 * 1024; // 20MB
+  const totalChunks = Math.ceil(file.size / chunkSize);
+  const uploadId = genUUID();
+  
+  const msgInput = document.getElementById('msgInput');
+  let originalPlaceholder = msgInput.placeholder;
+  msgInput.disabled = true;
+  
+  try {
+    const uploadPromises = [];
+    let completed = 0;
+    
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * chunkSize;
+      const end = Math.min(start + chunkSize, file.size);
+      const chunk = file.slice(start, end);
+      const path = `chunks/${uploadId}/${i}`;
+      
+      // رفع الأجزاء بالتوازي لسرعة فائقة
+      const promise = sb.storage.from('chat_files').upload(path, chunk, { cacheControl: '3600', upsert: true }).then(res => {
+        if (res.error) throw res.error;
+        completed++;
+        msgInput.placeholder = `جارٍ رفع الأجزاء (${completed}/${totalChunks})...`;
+        return res;
+      });
+      uploadPromises.push(promise);
+    }
+    
+    await Promise.all(uploadPromises);
+    
+    const data = { 
+      sender_id: currentUser.id, sender_name: currentUser.username, 
+      content: '', file_url: uploadId, file_type: file.type, file_name: file.name,
+      receiver_id: peerId, room: makeRoom(currentUser.id, peerId),
+      is_chunked: true, total_chunks: totalChunks, is_downloaded: false
+    };
+    const { data: inserted, error: dbErr } = await sb.from('messages').insert(data).select().single();
+    if (dbErr) throw dbErr;
+    
+    await renderMsg(inserted);
+    await idbKeyval.set(file.name, file); // حفظ نسخة محلية للمرسل
+    
+  } catch (e) {
+    alert("فشل الرفع: " + e.message);
+  } finally {
+    msgInput.placeholder = originalPlaceholder;
+    msgInput.disabled = false;
+  }
+}
+
+// 3. تحميل الملف المجزأ (للمستقبل)
+async function downloadChunkedFile(m) {
+  const totalChunks = m.total_chunks;
+  
+  openModal('p2pModal');
+  document.getElementById('p2pStatus').textContent = `جارٍ تحميل الأجزاء...`;
+  document.getElementById('p2pProgress').value = 0;
+
+  try {
+    const downloadPromises = [];
+    let completed = 0;
+    
+    for (let i = 0; i < totalChunks; i++) {
+      const path = `chunks/${m.file_url}/${i}`;
+      // تحميل الأجزاء بالتوازي لسرعة فائقة
+      const promise = sb.storage.from('chat_files').download(path).then(res => {
+        if (res.error) throw res.error;
+        completed++;
+        document.getElementById('p2pProgress').value = (completed / totalChunks) * 100;
+        document.getElementById('p2pStatus').textContent = `تم تحميل ${completed} من ${totalChunks}...`;
+        return res.data;
+      });
+      downloadPromises.push(promise);
+    }
+    
+    const chunks = await Promise.all(downloadPromises);
+    
+    const blob = new Blob(chunks, { type: m.file_type });
+    await idbKeyval.set(m.file_name, blob);
+    
+    // مسح الأجزاء من السيرفر بعد تجميعها
+    const filesToRemove = Array.from({ length: totalChunks }, (_, i) => `chunks/${m.file_url}/${i}`);
+    await sb.storage.from('chat_files').remove(filesToRemove);
+    
+    await sb.from('messages').update({ is_downloaded: true }).eq('id', m.id);
+    
+    closeModal('p2pModal');
+    
+    // تحديث الدردشة إذا كانت مفتوحة
+    if ((currentChatType === 'dm' && m.sender_id === currentChatId) || (currentChatType === 'group' && m.group_id === currentChatId)) {
+      document.getElementById('messagesArea').innerHTML = '';
+      renderedMsgIds.clear();
+      openChat(currentChatId, document.getElementById('chatTitle').textContent, currentChatType);
+    }
+    
+  } catch (e) {
+    console.error(e);
+    alert("فشل التحميل: " + e.message);
+    closeModal('p2pModal');
+  }
+}
+
+// 4. التحميل التلقائي للملفات عند الدخول (للمستخدمين غير المتصلين سابقاً)
 async function autoDownloadOfflineFiles() {
   const { data: msgs } = await sb.from('messages').select('*')
     .eq('receiver_id', currentUser.id)
-    .eq('is_p2p', false)
     .eq('is_downloaded', false)
     .not('file_url', 'is', null);
 
   if (!msgs || msgs.length === 0) return;
 
   for (const m of msgs) {
-    try {
-      const res = await fetch(m.file_url);
-      const blob = await res.blob();
-      
-      await idbKeyval.set(m.file_name, blob);
-      await sb.from('messages').update({ is_downloaded: true }).eq('id', m.id);
-      
-      const filePath = m.file_url.split('/chat_files/')[1];
-      if (filePath) await sb.storage.from('chat_files').remove([decodeURIComponent(filePath)]);
-
-      if (currentChatId === m.sender_id) {
-        document.getElementById('messagesArea').innerHTML = '';
-        renderedMsgIds.clear();
-        openChat(currentChatId, '', 'dm');
-      }
-    } catch (err) { console.error("Auto-download failed:", err); }
-  }
-}
-
-// ================== WebRTC P2P ==================
-const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-
-async function startP2PTransfer(file, peerId) {
-  const msgInput = document.getElementById('msgInput');
-  msgInput.placeholder = "جارٍ الاتصال المباشر...";
-  msgInput.disabled = true;
-
-  try {
-    await idbKeyval.set(file.name, file);
-
-    const data = { 
-      sender_id: currentUser.id, sender_name: currentUser.username, content: '', 
-      file_name: file.name, file_type: file.type, 
-      receiver_id: peerId, room: makeRoom(currentUser.id, peerId), 
-      is_p2p: true, is_downloaded: false
-    };
-    const { data: inserted } = await sb.from('messages').insert(data).select().single();
-    await renderMsg(inserted);
-
-    peerConnection = new RTCPeerConnection(rtcConfig);
-    dataChannel = peerConnection.createDataChannel('fileTransfer');
-
-    dataChannel.binaryType = 'arraybuffer';
-    dataChannel.onopen = async () => {
-      msgInput.placeholder = "بدء إرسال الملف...";
-      
-      const CHUNK_SIZE = 16384;
-      let offset = 0;
-      const reader = new FileReader();
-
-      const readSlice = (o) => {
-        const slice = file.slice(offset, o + CHUNK_SIZE);
-        reader.readAsArrayBuffer(slice);
-      };
-
-      reader.onload = (e) => {
-        if (dataChannel.readyState !== 'open') return;
+    if (m.is_chunked) {
+      await downloadChunkedFile(m); 
+    } else {
+      try {
+        const res = await fetch(m.file_url);
+        const blob = await res.blob();
+        await idbKeyval.set(m.file_name, blob);
+        await sb.from('messages').update({ is_downloaded: true }).eq('id', m.id);
         
-        if (dataChannel.bufferedAmount > dataChannel.bufferedAmountLowThreshold) {
-          dataChannel.onbufferedamountlow = () => {
-            dataChannel.onbufferedamountlow = null;
-            readSlice(offset);
-          };
-          return;
-        }
-
-        dataChannel.send(e.target.result);
-        offset += e.target.result.byteLength;
-
-        if (offset < file.size) {
-          readSlice(offset);
-        } else {
-          dataChannel.send("EOF");
-        }
-      };
-      readSlice(0);
-    };
-
-    peerConnection.onicecandidate = (event) => {
-      if (event.candidate) {
-        sb.channel(`p2p_${peerId}`).send({ type: 'broadcast', event: 'p2p_ice', payload: { candidate: event.candidate, from: currentUser.id } });
-      }
-    };
-
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
-    sb.channel(`p2p_${peerId}`).send({ type: 'broadcast', event: 'p2p_offer', payload: { offer, from: currentUser.id, fileName: file.name } });
-
-  } catch (e) {
-    alert("فشل بدء P2P: " + e.message);
-  } finally {
-    setTimeout(() => { msgInput.placeholder = "اكتب رسالتك..."; msgInput.disabled = false; }, 3000);
+        const filePath = m.file_url.split('/chat_files/')[1];
+        if (filePath) await sb.storage.from('chat_files').remove([decodeURIComponent(filePath)]);
+      } catch (err) { console.error("Auto-download failed:", err); }
+    }
   }
-}
-
-async function handleP2POffer({ payload }) {
-  if (payload.from !== currentChatId) return;
-  
-  receivedFileMeta = { fileName: payload.fileName };
-  receivedChunks = [];
-  
-  openModal('p2pModal');
-  document.getElementById('p2pStatus').textContent = "جارٍ الاتصال...";
-
-  peerConnection = new RTCPeerConnection(rtcConfig);
-  peerConnection.ondatachannel = (event) => {
-    dataChannel = event.channel;
-    dataChannel.binaryType = 'arraybuffer';
-
-    dataChannel.onopen = () => { document.getElementById('p2pStatus').textContent = "جارٍ استلام الملف..."; };
-    dataChannel.onmessage = async (e) => {
-      if (e.data === "EOF") {
-        const blob = new Blob(receivedChunks, { type: 'application/octet-stream' });
-        await idbKeyval.set(receivedFileMeta.fileName, blob);
-        closeModal('p2pModal');
-        alert("تم استلام الملف بنجاح!");
-        
-        document.getElementById('messagesArea').innerHTML = '';
-        renderedMsgIds.clear();
-        openChat(currentChatId, document.getElementById('chatTitle').textContent, 'dm');
-        return;
-      }
-      receivedChunks.push(e.data);
-      const total = receivedChunks.reduce((acc, curr) => acc + curr.byteLength, 0);
-      document.getElementById('p2pProgress').value = Math.min((total / (10 * 1024 * 1024)) * 100, 95);
-    };
-  };
-
-  await peerConnection.setRemoteDescription(new RTCSessionDescription(payload.offer));
-  const answer = await peerConnection.createAnswer();
-  await peerConnection.setLocalDescription(answer);
-  sb.channel(`p2p_${currentUser.id}`).send({ type: 'broadcast', event: 'p2p_answer', payload: { answer, from: currentUser.id } });
-}
-
-async function handleP2PAnswer({ payload }) {
-  if (payload.from !== currentChatId) return;
-  if (peerConnection) await peerConnection.setRemoteDescription(new RTCSessionDescription(payload.answer));
-}
-
-async function handleP2PIce({ payload }) {
-  if (payload.from !== currentChatId) return;
-  if (peerConnection) await peerConnection.addIceCandidate(new RTCIceCandidate(payload.candidate));
 }
 
 // ================== Settings & Local Files ==================

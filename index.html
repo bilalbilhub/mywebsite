@@ -75,6 +75,12 @@
   
   .file-link { display: inline-flex; align-items: center; gap: 8px; background: rgba(0,0,0,0.2); padding: 8px 12px; border-radius: 8px; color: inherit; text-decoration: none; margin-top: 8px; }
   .file-link:hover { background: rgba(0,0,0,0.4); }
+  
+  .file-progress { display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,0.2); padding: 8px 12px; border-radius: 8px; margin-top: 8px; font-size: 0.85rem; }
+  .progress-bar-container { flex-grow: 1; height: 6px; background: rgba(0,0,0,0.3); border-radius: 3px; overflow: hidden; max-width: 150px; }
+  .progress-bar-fill { height: 100%; background: var(--success); transition: width 0.2s; }
+  .spinner { display: inline-block; animation: spin 1s linear infinite; }
+  @keyframes spin { 100% { transform: rotate(360deg); } }
 
   #inputArea { padding: 15px 20px; background: var(--bg-chat); }
   .input-wrapper { background: var(--bg-sidebar); border-radius: 14px; display: flex; align-items: center; padding: 0 15px; border: 1px solid var(--border); }
@@ -247,9 +253,7 @@ const bcryptLib = typeof bcrypt !== 'undefined' ? bcrypt : dcodeIO.bcrypt;
 let currentUser = null, currentChatId = null, currentChatType = null;
 let renderedMsgIds = new Set();
 let friendsCache = [], groupsCache = [], requestsCache = [];
-let presenceChan = null;
-let globalChannel = null;
-let allUsersCache = [];
+let presenceChan = null, globalChannel = null, allUsersCache = [];
 
 // ================== Helpers ==================
 function toggleSidebar() { document.getElementById('sidebar').classList.toggle('open'); }
@@ -311,9 +315,7 @@ async function initApp() {
   av.textContent = currentUser.username[0].toUpperCase();
   av.style.background = getAvatarColor(currentUser.username);
 
-  if (localStorage.getItem('auto_accept') === 'true') {
-    document.getElementById('autoAcceptToggle').checked = true;
-  }
+  if (localStorage.getItem('auto_accept') === 'true') document.getElementById('autoAcceptToggle').checked = true;
 
   presenceChan = sb.channel('presence_room', { config: { presence: { key: currentUser.id } } });
   presenceChan.on('presence', { event: 'sync' }, () => renderFriendsList());
@@ -334,33 +336,22 @@ async function initApp() {
 // ================== Data Loading ==================
 async function loadAllData() {
   try {
-    const { data: fr, error: frError } = await sb.from('friendships')
+    const { data: fr } = await sb.from('friendships')
       .select('*, sender:site_users!sender_id(username), receiver:site_users!receiver_id(username)')
       .or(`sender_id.eq.${currentUser.id},receiver_id.eq.${currentUser.id}`);
-    
-    if (frError) console.error("خطأ في جلب الأصدقاء:", frError);
 
     const accepted = (fr || []).filter(f => f.status === 'accepted');
     requestsCache = (fr || []).filter(f => f.status === 'pending' && f.receiver_id === currentUser.id);
-    
     friendsCache = accepted.map(f => f.sender_id === currentUser.id ? { id: f.receiver_id, username: f.receiver?.username || 'مستخدم' } : { id: f.sender_id, username: f.sender?.username || 'مستخدم' });
 
-    const { data: mems, error: memsError } = await sb.from('group_members').select('group_id').eq('user_id', currentUser.id);
-    if (memsError) console.error("خطأ في جلب مجموعات المستخدم:", memsError);
-    
+    const { data: mems } = await sb.from('group_members').select('group_id').eq('user_id', currentUser.id);
     if (mems && mems.length > 0) {
-      const { data: grps, error: grpsError } = await sb.from('groups').select('*').in('id', mems.map(m => m.group_id));
-      if (grpsError) console.error("خطأ في جلب بيانات المجموعات:", grpsError);
+      const { data: grps } = await sb.from('groups').select('*').in('id', mems.map(m => m.group_id));
       groupsCache = grps || [];
     } else { groupsCache = []; }
 
-    renderRequests(); 
-    renderFriendsList(); 
-    renderGroupsList();
-
-  } catch (err) {
-    console.error("خطأ غير متوقع في تحميل البيانات:", err);
-  }
+    renderRequests(); renderFriendsList(); renderGroupsList();
+  } catch (err) { console.error(err); }
 }
 
 function renderRequests() {
@@ -368,11 +359,9 @@ function renderRequests() {
   const badge = document.getElementById('reqBadge');
   if (requestsCache.length === 0) {
     container.innerHTML = '<div style="padding:10px; color:var(--text-muted); font-size:0.85rem;">لا توجد طلبات</div>';
-    badge.style.display = 'none';
-    return;
+    badge.style.display = 'none'; return;
   }
-  badge.style.display = 'inline-block';
-  badge.textContent = requestsCache.length;
+  badge.style.display = 'inline-block'; badge.textContent = requestsCache.length;
   container.innerHTML = requestsCache.map(r => `
     <div class="contact-item" style="cursor:default;">
       <div class="avatar" style="background:${getAvatarColor(r.sender?.username || 'U')}">${(r.sender?.username || 'U')[0].toUpperCase()}</div>
@@ -389,18 +378,14 @@ function renderFriendsList() {
   const onlineIds = new Set(Object.keys(presenceChan.presenceState()));
   const container = document.getElementById('friendsList');
   if (friendsCache.length === 0) {
-    container.innerHTML = '<div style="padding:10px; color:var(--text-muted); font-size:0.85rem;">لا يوجد أصدقاء</div>';
-    return;
+    container.innerHTML = '<div style="padding:10px; color:var(--text-muted); font-size:0.85rem;">لا يوجد أصدقاء</div>'; return;
   }
   container.innerHTML = friendsCache.map(f => {
     const online = onlineIds.has(f.id);
     const active = (currentChatId === f.id && currentChatType === 'dm') ? 'active' : '';
     return `<div class="contact-item ${active}" onclick="openChat('${f.id}', '${escAttr(f.username)}', 'dm')">
       <div class="avatar" style="background:${getAvatarColor(f.username)}">${esc(f.username[0].toUpperCase())}</div>
-      <div class="info">
-        <div class="name">${esc(f.username)}</div>
-        <div class="status">${online ? '● متصل' : '○ غير متصل'}</div>
-      </div>
+      <div class="info"><div class="name">${esc(f.username)}</div><div class="status">${online ? '● متصل' : '○ غير متصل'}</div></div>
     </div>`;
   }).join('');
 }
@@ -408,8 +393,7 @@ function renderFriendsList() {
 function renderGroupsList() {
   const container = document.getElementById('groupsList');
   if (groupsCache.length === 0) {
-    container.innerHTML = '<div style="padding:10px; color:var(--text-muted); font-size:0.85rem;">لا توجد مجموعات</div>';
-    return;
+    container.innerHTML = '<div style="padding:10px; color:var(--text-muted); font-size:0.85rem;">لا توجد مجموعات</div>'; return;
   }
   container.innerHTML = groupsCache.map(g => {
     const active = (currentChatId === g.id && currentChatType === 'group') ? 'active' : '';
@@ -420,14 +404,13 @@ function renderGroupsList() {
   }).join('');
 }
 
-// ================== Friends Logic ==================
+// ================== Friends & Groups ==================
 async function openAddFriendModal() {
   document.getElementById('searchUsersInput').value = '';
   document.getElementById('allUsersList').innerHTML = '<div style="padding:10px; text-align:center;">جارٍ التحميل...</div>';
   openModal('addFriendModal');
   const { data: users } = await sb.from('site_users').select('id, username').neq('id', currentUser.id).order('username');
-  allUsersCache = users || [];
-  filterUsersList();
+  allUsersCache = users || []; filterUsersList();
 }
 function filterUsersList() {
   const q = document.getElementById('searchUsersInput').value.trim().toLowerCase();
@@ -446,18 +429,12 @@ async function sendFriendReq(receiverId) {
 }
 async function acceptReq(id) { await sb.from('friendships').update({ status: 'accepted' }).eq('id', id); await loadAllData(); }
 async function rejectReq(id) { await sb.from('friendships').delete().eq('id', id); await loadAllData(); }
-
 function onNewFriendRequest(payload) {
   if (payload.receiver_id === currentUser.id) {
-    if (localStorage.getItem('auto_accept') === 'true') {
-      sb.from('friendships').update({ status: 'accepted' }).eq('id', payload.id).then(() => loadAllData());
-    } else {
-      loadAllData();
-    }
+    if (localStorage.getItem('auto_accept') === 'true') sb.from('friendships').update({ status: 'accepted' }).eq('id', payload.id).then(() => loadAllData());
+    else loadAllData();
   }
 }
-
-// ================== Groups ==================
 function openCreateGroupModal() {
   document.getElementById('groupNameInput').value = '';
   const container = document.getElementById('groupFriendsChecklist');
@@ -512,9 +489,10 @@ async function sendMsg() {
 async function onNewMessage(m) {
   const isForMe = (currentChatType === 'group' && m.group_id === currentChatId) || (currentChatType === 'dm' && m.room === makeRoom(currentUser.id, currentChatId));
   
-  if (m.is_chunked && !m.is_downloaded && m.sender_id !== currentUser.id) {
-    if (isForMe) await renderMsg(m); // عرض "جارٍ الاستلام"
-    triggerDownload(m); // بدء السحب الفوري
+  if (m.is_chunked && m.sender_id !== currentUser.id && !m.is_downloaded) {
+    if (isForMe) await renderMsg(m);
+    // بدء السحب اللحظي
+    if (!activeDownloads.has(m.id)) triggerDownload(m);
     return; 
   }
   
@@ -524,10 +502,11 @@ async function onNewMessage(m) {
 async function onUpdateMessage(m) {
   const isForMe = (currentChatType === 'group' && m.group_id === currentChatId) || (currentChatType === 'dm' && m.room === makeRoom(currentUser.id, currentChatId));
   if (m.is_chunked && !m.is_uploading && !m.is_downloaded && m.sender_id !== currentUser.id) {
-    triggerDownload(m);
+    if (!activeDownloads.has(m.id)) triggerDownload(m);
   }
 }
 
+// ================== Render Messages ==================
 async function renderMsg(m) {
   if (renderedMsgIds.has(m.id)) return;
   renderedMsgIds.add(m.id);
@@ -535,6 +514,7 @@ async function renderMsg(m) {
   const isMine = m.sender_id === currentUser.id;
   const el = document.createElement('div');
   el.className = `message-row ${isMine ? 'mine' : ''}`;
+  el.dataset.msgId = m.id;
   
   let content = esc(m.content || '');
 
@@ -543,23 +523,15 @@ async function renderMsg(m) {
     
     if (localBlob) {
       const mediaUrl = URL.createObjectURL(localBlob);
-      if (m.file_type.startsWith('image/')) {
-        content += `<br><img src="${mediaUrl}" loading="lazy">`;
-      } else if (m.file_type.startsWith('video/')) {
-        content += `<br><video src="${mediaUrl}" controls playsinline preload="metadata"></video>`;
-      } else if (m.file_type.startsWith('audio/')) {
-        content += `<br><audio src="${mediaUrl}" controls></audio>`;
-      } else {
-        content += `<br><a class="file-link" href="${mediaUrl}" download="${escAttr(m.file_name)}">📄 تحميل الملف: ${esc(m.file_name)}</a>`;
-      }
+      if (m.file_type.startsWith('image/')) content += `<br><img src="${mediaUrl}" loading="lazy">`;
+      else if (m.file_type.startsWith('video/')) content += `<br><video src="${mediaUrl}" controls playsinline preload="metadata"></video>`;
+      else if (m.file_type.startsWith('audio/')) content += `<br><audio src="${mediaUrl}" controls></audio>`;
+      else content += `<br><a class="file-link" href="${mediaUrl}" download="${escAttr(m.file_name)}">📄 ${esc(m.file_name)}</a>`;
     } else {
-      // الملف غير موجود محلياً بعد
-      content += `<br><div style="background:rgba(255,255,255,0.1); padding:10px; border-radius:8px; margin-top:5px;">⏳ جارٍ استلام الملف (${esc(m.file_name)})... <span class="spinner">↻</span></div>`;
+      content += `<br><div class="file-progress">⏳ جارٍ الاستلام... <div class="progress-bar-container"><div class="progress-bar-fill" style="width:0%"></div></div></div>`;
       
-      // إذا كان الرابط موجوداً (ملف صغير) نحمله فوراً
-      if (m.file_url && !m.file_url.startsWith('chunks/') && !m.is_chunked) {
-        downloadSingleFile(m);
-      }
+      if (m.file_url && !m.is_chunked) downloadSingleFile(m);
+      else if (m.is_chunked && !m.is_uploading && !isMine) triggerDownload(m);
     }
   }
 
@@ -575,9 +547,12 @@ async function renderMsg(m) {
   box.appendChild(el); box.scrollTop = box.scrollHeight;
 }
 
-// ================== Background File Transfer (No Modals) ==================
-const CHUNK_SIZE = 3 * 1024 * 1024; // 3MB لكل قطعة
+// ================== File Transfer (Parallel & Pipeline) ==================
+const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB لكل قطعة
+const PARALLEL = 5; // 5 قطع في نفس الوقت
+const POLL_MS = 400; // 400ms انتظار بين المحاولات
 const activeDownloads = new Set();
+const fileProgress = {};
 
 async function handleFileSelect(input) {
   const file = input.files[0];
@@ -592,7 +567,7 @@ async function handleFileSelect(input) {
   const isPeerOnline = onlineIds.has(peerId);
 
   if (isPeerOnline) {
-    uploadChunkedFileBackground(file, peerId);
+    uploadChunkedFile(file, peerId);
   } else {
     if (file.size > 20 * 1024 * 1024) {
       return alert("المستخدم غير متصل. الحد الأقصى 20 ميجابايت. اطلب منه الاتصال أولاً.");
@@ -610,72 +585,139 @@ async function uploadSingleFile(file, peerId) {
     if (upErr) throw upErr;
     const { data: urlData } = sb.storage.from('chat_files').getPublicUrl(filePath);
     
-    const data = { 
-      sender_id: currentUser.id, sender_name: currentUser.username, content: '', 
-      file_url: urlData.publicUrl, file_type: file.type, file_name: file.name,
-      receiver_id: peerId, room: makeRoom(currentUser.id, peerId),
-      is_chunked: false, is_downloaded: false
-    };
+    const data = { sender_id: currentUser.id, sender_name: currentUser.username, content: '', file_url: urlData.publicUrl, file_type: file.type, file_name: file.name, receiver_id: peerId, room: makeRoom(currentUser.id, peerId), is_chunked: false, is_downloaded: false };
     const { data: ins, error } = await sb.from('messages').insert(data).select().single();
     if (error) throw error;
     await renderMsg(ins);
   } catch (e) { alert("فشل الرفع: " + e.message); }
 }
 
-// رفع ملف كبير في الخلفية (بدون تعليق الواجهة)
-async function uploadChunkedFileBackground(file, peerId) {
+// رفع ملف كبير (متوازي)
+async function uploadChunkedFile(file, peerId) {
   const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
   const uploadId = genUUID();
   
-  // إدراج الرسالة فوراً
-  const data = { 
-    sender_id: currentUser.id, sender_name: currentUser.username, content: '', 
-    file_url: uploadId, file_type: file.type, file_name: file.name,
-    receiver_id: peerId, room: makeRoom(currentUser.id, peerId),
-    is_chunked: true, total_chunks: totalChunks, is_downloaded: false, is_uploading: true
-  };
+  const data = { sender_id: currentUser.id, sender_name: currentUser.username, content: '', file_url: uploadId, file_type: file.type, file_name: file.name, receiver_id: peerId, room: makeRoom(currentUser.id, peerId), is_chunked: true, total_chunks: totalChunks, is_downloaded: false, is_uploading: true };
   
   try {
     const { data: ins, error: dbErr } = await sb.from('messages').insert(data).select().single();
     if (dbErr) throw dbErr;
     
-    await idbKeyval.set(file.name, file); 
-    await renderMsg(ins); // تظهر الرسالة فوراً للمرسل
-
-    // الرفع في الخلفية دون حجب الإدخال
+    await idbKeyval.set(file.name, file);
+    fileProgress[ins.id] = { uploaded: 0, total: totalChunks, isUpload: true };
+    await renderMsg(ins);
+    
+    // الرفع في الخلفية
     (async () => {
-      let failed = false;
-      for (let i = 0; i < totalChunks; i++) {
-        if (failed) break;
-        const start = i * CHUNK_SIZE;
-        const end = Math.min(start + CHUNK_SIZE, file.size);
-        const chunk = file.slice(start, end);
-        const path = `chunks/${uploadId}/${i}`;
-        
-        try {
-          const { error } = await sb.storage.from('chat_files').upload(path, chunk, { upsert: true });
-          if (error) throw error;
-        } catch (err) {
-          console.error("فشل رفع القطعة " + i, err);
-          failed = true;
-          alert("انقطع الاتصال أثناء رفع الملف.");
+      try {
+        for (let i = 0; i < totalChunks; i += PARALLEL) {
+          const batch = [];
+          for (let j = i; j < Math.min(i + PARALLEL, totalChunks); j++) {
+            const start = j * CHUNK_SIZE, end = Math.min(start + CHUNK_SIZE, file.size);
+            const chunk = file.slice(start, end);
+            const path = `chunks/${uploadId}/${j}`;
+            batch.push(uploadWithRetry(path, chunk));
+          }
+          const results = await Promise.all(batch);
+          if (results.some(r => !r)) throw new Error("فشل رفع بعض الأجزاء");
+          
+          fileProgress[ins.id].uploaded = Math.min(i + PARALLEL, totalChunks);
+          updateFileProgress(ins.id);
         }
-      }
-      
-      if (!failed) {
         await sb.from('messages').update({ is_uploading: false }).eq('id', ins.id);
-      } else {
-        // تنظيف في حال الفشل
-        const toDelete = [];
-        for (let i = 0; i < totalChunks; i++) toDelete.push(`chunks/${uploadId}/${i}`);
-        await sb.storage.from('chat_files').remove(toDelete);
+        delete fileProgress[ins.id];
+        updateFileProgress(ins.id);
+      } catch (err) {
+        console.error("Upload failed:", err);
+        const toRemove = Array.from({ length: totalChunks }, (_, i) => `chunks/${uploadId}/${i}`);
+        await sb.storage.from('chat_files').remove(toRemove);
+        await sb.from('messages').update({ is_uploading: false, is_chunked: false, content: '❌ فشل الرفع' }).eq('id', ins.id);
+        delete fileProgress[ins.id];
       }
     })();
-
   } catch (e) { alert("خطأ: " + e.message); }
 }
 
-// تحميل ملف صغير
+async function uploadWithRetry(path, data, maxRetries = 3) {
+  for (let i = 0; i < maxRetries; i++) {
+    const { error } = await sb.storage.from('chat_files').upload(path, data, { upsert: true });
+    if (!error) return true;
+    if (i < maxRetries - 1) await new Promise(r => setTimeout(r, 500));
+  }
+  return false;
+}
+
+async function triggerDownload(m) {
+  if (activeDownloads.has(m.id)) return;
+  activeDownloads.add(m.id);
+  
+  const totalChunks = m.total_chunks;
+  const chunks = new Array(totalChunks);
+  fileProgress[m.id] = { downloaded: 0, total: totalChunks, isUpload: false };
+  
+  try {
+    updateFileProgress(m.id);
+    
+    for (let i = 0; i < totalChunks; i += PARALLEL) {
+      const batch = [];
+      for (let j = i; j < Math.min(i + PARALLEL, totalChunks); j++) {
+        const path = `chunks/${m.file_url}/${j}`;
+        batch.push((async () => {
+          const data = await downloadWithRetry(path);
+          if (!data) throw new Error(`فشل تحميل القطعة ${j}`);
+          chunks[j] = data;
+          fileProgress[m.id].downloaded++;
+          updateFileProgress(m.id);
+        })());
+      }
+      await Promise.all(batch);
+    }
+    
+    const blob = new Blob(chunks, { type: m.file_type });
+    await idbKeyval.set(m.file_name, blob);
+    
+    const toRemove = Array.from({ length: totalChunks }, (_, i) => `chunks/${m.file_url}/${i}`);
+    await sb.storage.from('chat_files').remove(toRemove);
+    await sb.from('messages').update({ is_downloaded: true }).eq('id', m.id);
+    
+    delete fileProgress[m.id];
+    activeDownloads.delete(m.id);
+    refreshCurrentChat();
+    
+  } catch (e) {
+    console.error("Download failed:", e);
+    delete fileProgress[m.id];
+    activeDownloads.delete(m.id);
+  }
+}
+
+async function downloadWithRetry(path, maxRetries = 300) {
+  for (let i = 0; i < maxRetries; i++) {
+    const { data, error } = await sb.storage.from('chat_files').download(path);
+    if (!error && data) return data;
+    await new Promise(r => setTimeout(r, POLL_MS));
+  }
+  return null;
+}
+
+function updateFileProgress(msgId) {
+  const el = document.querySelector(`[data-msg-id="${msgId}"]`);
+  if (!el) return;
+  const progressDiv = el.querySelector('.file-progress');
+  if (!progressDiv) return;
+  
+  const p = fileProgress[msgId];
+  if (!p) return;
+  
+  if (p.isUpload) {
+    const pct = Math.round((p.uploaded / p.total) * 100);
+    progressDiv.innerHTML = `📤 جارٍ الرفع (${pct}%) <div class="progress-bar-container"><div class="progress-bar-fill" style="width:${pct}%"></div></div>`;
+  } else {
+    const pct = Math.round((p.downloaded / p.total) * 100);
+    progressDiv.innerHTML = `📥 جارٍ الاستلام (${pct}%) <div class="progress-bar-container"><div class="progress-bar-fill" style="width:${pct}%"></div></div>`;
+  }
+}
+
 async function downloadSingleFile(m) {
   if (activeDownloads.has(m.id)) return;
   activeDownloads.add(m.id);
@@ -684,69 +726,11 @@ async function downloadSingleFile(m) {
     const blob = await res.blob();
     await idbKeyval.set(m.file_name, blob);
     await sb.from('messages').update({ is_downloaded: true }).eq('id', m.id);
-    
-    // حذف من السيرفر بعد التحميل
     const filePath = m.file_url.split('/chat_files/')[1];
     if (filePath) await sb.storage.from('chat_files').remove([decodeURIComponent(filePath)]);
-    
     refreshCurrentChat();
   } catch (e) { console.error(e); }
   finally { activeDownloads.delete(m.id); }
-}
-
-// نظام السحب اللحظي (Pull) للملفات المجزأة
-async function triggerDownload(m) {
-  if (activeDownloads.has(m.id)) return;
-  activeDownloads.add(m.id);
-  
-  const totalChunks = m.total_chunks;
-  const chunks = [];
-  
-  try {
-    // السحب اللحظي: نحاول تحميل القطع واحدة تلو الأخرى
-    // إذا لم تكن القطعة موجودة بعد (404)، ننتظر ثانية ونحاول مجدداً
-    for (let i = 0; i < totalChunks; i++) {
-      const path = `chunks/${m.file_url}/${i}`;
-      let chunkData = null;
-      let retries = 0;
-      
-      while (!chunkData && retries < 120) { // الانتظار حتى دقيقتين كحد أقصى للقطعة الواحدة
-        // التحقق إذا كان المستخدم أغلق الدردشة (لتوفير الموارد)
-        if (currentChatId !== m.sender_id && currentChatType === 'dm' && currentChatId !== m.receiver_id) break;
-
-        try {
-          const res = await sb.storage.from('chat_files').download(path);
-          if (!res.error) {
-            chunkData = res.data;
-          } else {
-            await new Promise(r => setTimeout(r, 1000)); // انتظر ثانية
-            retries++;
-          }
-        } catch (err) {
-          await new Promise(r => setTimeout(r, 1000));
-          retries++;
-        }
-      }
-      
-      if (!chunkData) throw new Error("انتهت مهلة استلام القطعة");
-      chunks.push(chunkData);
-    }
-    
-    const blob = new Blob(chunks, { type: m.file_type });
-    await idbKeyval.set(m.file_name, blob);
-    
-    // تنظيف السيرفر
-    const toRemove = Array.from({ length: totalChunks }, (_, i) => `chunks/${m.file_url}/${i}`);
-    await sb.storage.from('chat_files').remove(toRemove);
-    await sb.from('messages').update({ is_downloaded: true }).eq('id', m.id);
-    
-    refreshCurrentChat();
-    
-  } catch (e) {
-    console.error("فشل التحميل", e);
-  } finally {
-    activeDownloads.delete(m.id);
-  }
 }
 
 function refreshCurrentChat() {
@@ -756,21 +740,13 @@ function refreshCurrentChat() {
   openChat(currentChatId, document.getElementById('chatTitle').textContent, currentChatType);
 }
 
-// التحميل التلقائي عند الدخول للمحادثة
 async function autoDownloadOfflineFiles() {
   const { data: msgs } = await sb.from('messages').select('*')
-    .eq('receiver_id', currentUser.id)
-    .eq('is_downloaded', false)
-    .not('file_url', 'is', null);
-
+    .eq('receiver_id', currentUser.id).eq('is_downloaded', false).not('file_url', 'is', null);
   if (!msgs || msgs.length === 0) return;
-
   for (const m of msgs) {
-    if (m.is_chunked) {
-      if (!m.is_uploading) triggerDownload(m); 
-    } else {
-      downloadSingleFile(m);
-    }
+    if (m.is_chunked && !m.is_uploading) triggerDownload(m); 
+    else if (!m.is_chunked) downloadSingleFile(m);
   }
 }
 
@@ -795,24 +771,14 @@ async function renderLocalFiles() {
 
 async function deleteSingleFile(key) {
   if (!confirm("حذف هذا الملف من متصفحك؟")) return;
-  await idbKeyval.del(key);
-  renderLocalFiles();
+  await idbKeyval.del(key); renderLocalFiles();
 }
 
 async function deleteAllLocalFiles() {
   if (!confirm("حذف جميع الملفات المحملة؟")) return;
-  await idbKeyval.clear();
-  renderLocalFiles();
+  await idbKeyval.clear(); renderLocalFiles();
   alert("تم حذف جميع الملفات.");
 }
-
-// إضافة CSS للسبينر
-const style = document.createElement('style');
-style.textContent = `
-  .spinner { display: inline-block; animation: spin 1s linear infinite; margin-left: 5px; }
-  @keyframes spin { 100% { transform: rotate(360deg); } }
-`;
-document.head.appendChild(style);
 
 // ================== Boot ==================
 (function boot() {
